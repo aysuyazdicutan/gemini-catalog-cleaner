@@ -7,7 +7,11 @@ import os
 # from web_scraper import web_arama_ve_cek
 
 # ---------------- AYARLAR ----------------
-API_KEY = "AIzaSyCsnbIQPMHopz5K2ySG2l-_pIJgOeCUZfg"  # API Key'iniz
+# API Key'i environment variable'dan al (güvenlik için)
+API_KEY = os.getenv("GEMINI_API_KEY")  # Environment variable'dan alınır
+if not API_KEY:
+    raise ValueError("GEMINI_API_KEY environment variable bulunamadı! Lütfen .env dosyası oluşturun veya environment variable ayarlayın.")
+
 GIRIS_DOSYASI = "Copy of KLİMAAA.xlsx"      # Excel dosyanızın tam adı
 CIKIS_DOSYASI = "temizlenmis_katalog.xlsx"
 

@@ -237,7 +237,6 @@ if uploaded_file is not None:
         # İlk satır teknik kodlar içeriyorsa atla
         if len(df) > 0 and df.iloc[0].get('Başlık', '') if 'Başlık' in df.columns else '':
             if str(df.iloc[0].get('Başlık', '')).startswith('TITLE'):
-                st.info("⚠️ İlk satır teknik kodlar içeriyor, atlanıyor...")
                 df = df.iloc[1:].reset_index(drop=True)
         
         st.dataframe(df.head(), use_container_width=True)

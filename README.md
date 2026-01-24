@@ -9,16 +9,52 @@ Bu proje, Google Gemini AI kullanarak Excel dosyasındaki ham ürün verilerini 
 pip install -r requirements.txt
 ```
 
+2. API Key'i ayarlayın:
+   - `.env.example` dosyasını `.env` olarak kopyalayın:
+   ```bash
+   cp .env.example .env
+   ```
+   - `.env` dosyasını açın ve Google Gemini API key'inizi ekleyin:
+   ```
+   GEMINI_API_KEY=your_api_key_here
+   ```
+   - API key almak için: https://makersuite.google.com/app/apikey
+
 ## Kullanım
 
-1. `urunler_ham.xlsx` adında bir Excel dosyası hazırlayın ve proje klasörüne koyun.
-2. Excel dosyasında en azından `Baslik` sütunu bulunmalıdır.
-3. Scripti çalıştırın:
+### Yerel Kullanım (Python Script)
+
+1. Excel dosyanızı proje klasörüne koyun ve `main.py` içinde `GIRIS_DOSYASI` değişkenini güncelleyin.
+2. Scripti çalıştırın:
 ```bash
 python main.py
 ```
 
-4. İşlem tamamlandığında `urunler_temiz.xlsx` dosyası oluşturulacaktır.
+3. İşlem tamamlandığında `temizlenmis_katalog.xlsx` dosyası oluşturulacaktır.
+
+### Streamlit Web Uygulaması
+
+1. Streamlit uygulamasını başlatın:
+```bash
+streamlit run streamlit_app.py
+```
+
+2. Tarayıcıda açılan sayfada:
+   - API key'inizi girin (veya Streamlit Cloud secrets kullanın)
+   - Excel dosyanızı yükleyin
+   - "İşlemi Başlat" butonuna tıklayın
+   - İşlem tamamlandığında temizlenmiş dosyayı indirin
+
+### Streamlit Cloud Deployment
+
+1. GitHub'a push edin
+2. https://share.streamlit.io adresine gidin
+3. Repo'nuzu bağlayın
+4. Main file: `streamlit_app.py`
+5. Secrets → TOML formatında ekleyin:
+   ```toml
+   GEMINI_API_KEY = "your_api_key_here"
+   ```
 
 ## Özellikler
 

@@ -3,14 +3,23 @@ import pandas as pd
 import json
 import time
 import os
+from dotenv import load_dotenv
+
+# .env dosyasından environment variable'ları yükle
+load_dotenv()
+
 # Web scraping kaldırıldı - Gemini web'de arama yapacak
 # from web_scraper import web_arama_ve_cek
 
 # ---------------- AYARLAR ----------------
 # API Key'i environment variable'dan al (güvenlik için)
-API_KEY = os.getenv("GEMINI_API_KEY")  # Environment variable'dan alınır
+API_KEY = os.getenv("GEMINI_API_KEY")  # Environment variable'dan alınır (.env dosyasından)
 if not API_KEY:
-    raise ValueError("GEMINI_API_KEY environment variable bulunamadı! Lütfen .env dosyası oluşturun veya environment variable ayarlayın.")
+    raise ValueError(
+        "GEMINI_API_KEY environment variable bulunamadı!\n"
+        "Lütfen .env dosyası oluşturun ve şu satırı ekleyin:\n"
+        "GEMINI_API_KEY=your_api_key_here"
+    )
 
 GIRIS_DOSYASI = "Copy of KLİMAAA.xlsx"      # Excel dosyanızın tam adı
 CIKIS_DOSYASI = "temizlenmis_katalog.xlsx"

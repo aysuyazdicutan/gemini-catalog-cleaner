@@ -11,33 +11,40 @@ from main import (
     template_bul, system_instruction
 )
 
-# Sayfa yapılandırması
+# Page Configuration
 st.set_page_config(
-    page_title="Ürün Katalog Temizleme",
+    page_title="Product Catalog Cleaning",
     page_icon="📦",
     layout="wide"
 )
 
-st.title("📦 Ürün Katalog Temizleme Aracı")
-st.markdown("Excel dosyanızı yükleyin. İşlem uzun sürse veya sayfa yenilense bile verileriniz hafızada tutulur.")
+st.title("📦 Product Catalog Cleaning Tool")
+st.markdown("""
+This tool is designed to handle long-running processes (e.g., 1000+ products). 
+Even if the page refreshes, you can continue where you left off. 
+Your data is saved instantly as each product is processed.
+""")
 
-# --- SESSION STATE (GELİŞTİRİLMİŞ HAFIZA) ---
+# --- SESSION STATE (MEMORY) MANAGEMENT ---
 if 'islenen_listesi' not in st.session_state:
-    st.session_state.islenen_listesi = [] # İşlenen satırları anlık tutar
+    st.session_state.islenen_listesi = []
 if 'islem_aktif' not in st.session_state:
     st.session_state.islem_aktif = False
 
-# API Key yönetimi
+# API Key Management
 api_key = None
 if hasattr(st, 'secrets') and "GEMINI_API_KEY" in st.secrets:
     api_key = st.secrets["GEMINI_API_KEY"]
+
 if not api_key:
-    api_key = st.text_input("Google Gemini API Key", type="password")
+    api_key = st.text_input("Google Gemini API Key", type="password", 
+                           help="Enter your Gemini API key")
+
 if not api_key:
-    st.warning("⚠️ Lütfen API key'inizi girin.")
+    st.warning("⚠️ Please enter your API key to proceed.")
     st.stop()
 
-# Gemini modellerini initialize et
+# Initialize Gemini Models
 @st.cache_resource
 def init_models(api_key):
     genai.configure(api_key=api_key)
@@ -54,120 +61,134 @@ def init_models(api_key):
 try:
     model, chat_model = init_models(api_key)
 except Exception as e:
-    st.error(f"❌ API key hatası: {str(e)}")
+    st.error(f"❌ API key error: {str(e)}")
     st.stop()
 
-# --- YARDIMCI FONKSİYONLAR ---
+# --- HELPER FUNCTIONS ---
 def gemini_eksik_sutun_sor_streamlit(urun_adi, eksik_sutun_basligi, marka=None):
+    """Asks Gemini for missing columns with a focus on web search"""
     try:
-        soru = f"Ürün: {urun_adi}\nMarka: {marka if marka else ''}\nSoru: Bu ürün için '{eksik_sutun_basligi}' nedir? Sadece değeri (örn: 2 l, 16 GB) ver. Bilmiyorsan 'bilinmiyor' yaz."
+        soru = f"""Product Name: {urun_adi}
+Brand: {marka if marka else 'Unknown'}
+Missing Feature: {eksik_sutun_basligi}
+
+What is the value of this feature for this product? Provide only the value (e.g., 2 l, 16 GB, Black). 
+If it is absolutely unknown, just write 'unknown'."""
+        
         response = chat_model.generate_content(soru)
         cevap = response.text.strip()
-        return None if "bilinmiyor" in cevap.lower() or not cevap else cevap
-    except: return None
+        
+        if "unknown" in cevap.lower() or not cevap:
+            return None
+        return cevap
+    except:
+        return None
 
 def urun_isle_streamlit(row_dict, model):
+    """Main cleaning and standardization process"""
     teknik_veri = {EXCEL_TO_TECHNICAL.get(k, k): v for k, v in row_dict.items() if pd.notna(v)}
     anlasilir_veri = {SUTUN_HARITASI.get(k, k): v for k, v in teknik_veri.items()}
+    
     if 'Kategori' in row_dict:
         kategori = str(row_dict.get('Kategori', '')).strip()
         template = template_bul(kategori)
-        if template: anlasilir_veri['_Template_Basliktan_Silinecek_Ozellikler'] = template
+        if template:
+            anlasilir_veri['_Template_Basliktan_Silinecek_Ozellikler'] = template
     
-    prompt = f"GİRDİ VERİSİ:\n{json.dumps(anlasilir_veri, ensure_ascii=False)}"
+    prompt = f"INPUT DATA:\n{json.dumps(anlasilir_veri, ensure_ascii=False)}"
+    
     try:
         response = model.generate_content(system_instruction + prompt)
         return json.loads(response.text)
-    except Exception as e:
-        return {"uyari": f"API Hatası: {str(e)[:100]}", "temiz_baslik": row_dict.get('Başlık', 'HATA')}
+    except:
+        return {"uyari": "API error", "temiz_baslik": row_dict.get('Başlık', 'ERROR')}
 
-# --- DOSYA YÜKLEME VE KONTROLLER ---
-uploaded_file = st.file_uploader("Excel dosyasını yükleyin", type=['xlsx'])
+# --- FILE UPLOAD ---
+uploaded_file = st.file_uploader("Upload your Excel file", type=['xlsx'])
 
 if uploaded_file is not None:
     df = pd.read_excel(uploaded_file)
-    if len(df) > 0 and 'Başlık' in df.columns and str(df.iloc[0].get('Başlık', '')).startswith('TITLE'):
-        df = df.iloc[1:].reset_index(drop=True)
-
-    st.info(f"Dosyada {len(df)} ürün var. Şu ana kadar {len(st.session_state.islenen_listesi)} ürün işlendi.")
+    
+    # Skip technical header row if exists
+    if len(df) > 0 and 'Başlık' in df.columns:
+        if str(df.iloc[0].get('Başlık', '')).startswith('TITLE'):
+            df = df.iloc[1:].reset_index(drop=True)
+    
+    st.info(f"📋 Total Products: {len(df)} | ✅ Processed: {len(st.session_state.islenen_listesi)}")
 
     col1, col2 = st.columns(2)
     with col1:
-        start_btn = st.button("🚀 İşlemi Başlat / Devam Et", type="primary", use_container_width=True)
+        if st.button("🚀 Start / Continue Process", type="primary", use_container_width=True):
+            st.session_state.islem_aktif = True
     with col2:
-        if st.button("🗑️ Hafızayı Sıfırla", use_container_width=True):
+        if st.button("🗑️ Reset Memory", use_container_width=True):
             st.session_state.islenen_listesi = []
+            st.session_state.islem_aktif = False
             st.rerun()
 
-    if start_btn:
-        st.session_state.islem_aktif = True
+    if st.session_state.islem_aktif:
         progress_bar = st.progress(0)
         status_text = st.empty()
         
-        # Kaldığı yerden devam etmek için mevcut SKU'ları kontrol et
+        # Determine already processed SKUs
         islenen_skular = [str(x.get('SHOP_SKU', '')) for x in st.session_state.islenen_listesi]
-
+        
         for index, row in df.iterrows():
             row_dict = row.to_dict()
             sku = str(row_dict.get('SHOP_SKU', ''))
-
-            # Ürün zaten işlendiyse atla
+            
+            # Skip if already processed
             if sku in islenen_skular:
                 continue
-
-            # İlerleme güncelle
+                
             progress = (index + 1) / len(df)
             progress_bar.progress(progress)
-            status_text.text(f"İşleniyor ({index+1}/{len(df)}): {row_dict.get('Başlık', '')[:50]}...")
-
-            try:
-                # Ana işleme
-                gemini_cikti = urun_isle_streamlit(row_dict, model)
-                flat_result = row_dict.copy()
-                flat_result['Başlık'] = gemini_cikti.get("temiz_baslik", row_dict.get('Başlık', ''))
-                
-                # Özellikleri güncelle
-                ozellikler = gemini_cikti.get("duzenlenmis_ozellikler", {})
-                if "Islemci" in ozellikler: flat_result['İşlemci (tr_TR)'] = ozellikler.get("Islemci")
-                if "RAM" in ozellikler: flat_result['RAM Bellek Boyutu'] = ozellikler.get("RAM")
-                if "Disk" in ozellikler: flat_result['Sabit disk kapasitesi'] = ozellikler.get("Disk")
-                
-                # Boş sütunları doldur
-                for sutun in row_dict.keys():
-                    if sutun not in {'Başlık', 'SHOP_SKU', 'Kategori'} and (pd.isna(row_dict[sutun]) or str(row_dict[sutun]).strip() == ''):
-                        bulunan = gemini_eksik_sutun_sor_streamlit(row_dict.get('Başlık', ''), sutun, row_dict.get('Marka'))
-                        if bulunan: flat_result[sutun] = bulunan
-
-                flat_result['Uyari'] = gemini_cikti.get("uyari", "")
-
-                # --- KRİTİK: ANLIK KAYIT ---
-                st.session_state.islenen_listesi.append(flat_result)
-                
-            except Exception as e:
-                st.error(f"Satır {index} hatası: {e}")
+            status_text.text(f"Processing ({index + 1}/{len(df)}): {row_dict.get('Başlık', '')[:50]}...")
             
-            time.sleep(0.5) # API stabilitesi için kısa bekleme
+            # Processing
+            gemini_cikti = urun_isle_streamlit(row_dict, model)
+            flat_result = row_dict.copy()
+            flat_result['Başlık'] = gemini_cikti.get("temiz_baslik", row_dict.get('Başlık', ''))
+            
+            # Update features based on output
+            ozellikler = gemini_cikti.get("duzenlenmis_ozellikler", {})
+            for key, val in ozellikler.items():
+                if key == "RAM": flat_result['RAM Bellek Boyutu'] = val
+                if key == "Disk": flat_result['Sabit disk kapasitesi'] = val
+            
+            # Ask for missing columns
+            for sutun in row_dict.keys():
+                if sutun not in {'Başlık', 'SHOP_SKU', 'Kategori'} and pd.isna(row_dict[sutun]):
+                    bulunan = gemini_eksik_sutun_sor_streamlit(row_dict.get('Başlık', ''), sutun, row_dict.get('Marka'))
+                    if bulunan:
+                        flat_result[sutun] = bulunan
 
+            flat_result['Warning'] = gemini_cikti.get("uyari", "")
+            
+            # --- PERSISTENCE: SAVE INSTANTLY ---
+            st.session_state.islenen_listesi.append(flat_result)
+            
+            # Rate limit protection
+            time.sleep(0.5)
+            
         st.session_state.islem_aktif = False
-        st.success("✅ İşlem tamamlandı!")
+        st.success("✅ Process finished or no new products to process!")
 
-# --- SONUÇLARI GÖSTER VE İNDİR (Butonun Dışında) ---
+# --- RESULTS AND DOWNLOAD ---
 if st.session_state.islenen_listesi:
     st.divider()
-    st.subheader(f"📊 İşlenen Veriler ({len(st.session_state.islenen_listesi)} Ürün)")
-    
     res_df = pd.DataFrame(st.session_state.islenen_listesi)
+    st.subheader(f"📊 Processed Data ({len(res_df)} Products)")
     st.dataframe(res_df, use_container_width=True)
     
-    # Excel indirme hazırlığı
     output = io.BytesIO()
     res_df.to_excel(output, index=False)
     output.seek(0)
     
     st.download_button(
-        label="📥 Temizlenmiş Kataloğu İndir",
+        label="📥 Download Cleaned Catalog",
         data=output,
-        file_name="temizlenmis_katalog.xlsx",
+        file_name="cleaned_catalog.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         type="primary"
     )

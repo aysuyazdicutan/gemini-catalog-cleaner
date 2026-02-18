@@ -1,15 +1,9 @@
 import streamlit as st
-import google.generativeai as genai
 import pandas as pd
-import json
-import time
 import os
 import io
-import re
-from main import (
-    EXCEL_TO_TECHNICAL, SUTUN_HARITASI, BASLIKTAN_SILINECEK_OZELLIKLER,
-    template_bul, system_instruction
-)
+import time
+import requests
 
 # Page Configuration
 st.set_page_config(
@@ -25,170 +19,151 @@ Even if the page refreshes, you can continue where you left off.
 Your data is saved instantly as each product is processed.
 """)
 
-# --- SESSION STATE (MEMORY) MANAGEMENT ---
-if 'islenen_listesi' not in st.session_state:
-    st.session_state.islenen_listesi = []
-if 'islem_aktif' not in st.session_state:
-    st.session_state.islem_aktif = False
+# --- SESSION STATE ---
+if "job_id" not in st.session_state:
+    st.session_state.job_id = None
+if "job_status" not in st.session_state:
+    st.session_state.job_status = None
+if "uploaded_file_name" not in st.session_state:
+    st.session_state.uploaded_file_name = None
 
-# API Key Management
-api_key = None
-if hasattr(st, 'secrets') and "GEMINI_API_KEY" in st.secrets:
-    api_key = st.secrets["GEMINI_API_KEY"]
+# Streamlit Cloud'da st.secrets, local'de .env / BACKEND_URL
+_backend = "http://localhost:8000"
+if hasattr(st, "secrets") and st.secrets.get("BACKEND_URL"):
+    _backend = st.secrets["BACKEND_URL"]
+else:
+    _backend = os.getenv("BACKEND_URL", _backend)
+backend_url = _backend.rstrip("/")
 
-if not api_key:
-    api_key = st.text_input("Google Gemini API Key", type="password", 
-                           help="Enter your Gemini API key")
-
-if not api_key:
-    st.warning("⚠️ Please enter your API key to proceed.")
-    st.stop()
-
-# Initialize Gemini Models
-@st.cache_resource
-def init_models(api_key):
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel(
-        model_name="gemini-flash-latest",
-        generation_config={"response_mime_type": "application/json"}
-    )
-    chat_model = genai.GenerativeModel(
-        'gemini-flash-latest',
-        generation_config={"temperature": 0.1}
-    )
-    return model, chat_model
-
-try:
-    model, chat_model = init_models(api_key)
-except Exception as e:
-    st.error(f"❌ API key error: {str(e)}")
-    st.stop()
-
-# --- HELPER FUNCTIONS ---
-def gemini_eksik_sutun_sor_streamlit(urun_adi, eksik_sutun_basligi, marka=None):
-    """Asks Gemini for missing columns with a focus on web search"""
+# --- BACKEND CHECK ---
+def backend_reachable():
     try:
-        soru = f"""Product Name: {urun_adi}
-Brand: {marka if marka else 'Unknown'}
-Missing Feature: {eksik_sutun_basligi}
+        r = requests.get(f"{backend_url}/health", timeout=2)
+        return r.status_code == 200
+    except Exception:
+        return False
 
-What is the value of this feature for this product? Provide only the value (e.g., 2 l, 16 GB, Black). 
-If it is absolutely unknown, just write 'unknown'."""
-        
-        response = chat_model.generate_content(soru)
-        cevap = response.text.strip()
-        
-        if "unknown" in cevap.lower() or not cevap:
-            return None
-        return cevap
-    except:
-        return None
+with st.sidebar:
+    st.subheader("⚙️ Backend")
+    st.caption(f"URL: `{backend_url}`")
+    if backend_reachable():
+        st.success("✅ API bağlı")
+    else:
+        st.error("❌ API’ye ulaşılamıyor. Önce şunları çalıştır:\n1. Redis\n2. `uvicorn api:app --reload`\n3. `celery -A celery_app.celery_app worker --loglevel=info`")
 
-def urun_isle_streamlit(row_dict, model):
-    """Main cleaning and standardization process"""
-    teknik_veri = {EXCEL_TO_TECHNICAL.get(k, k): v for k, v in row_dict.items() if pd.notna(v)}
-    anlasilir_veri = {SUTUN_HARITASI.get(k, k): v for k, v in teknik_veri.items()}
-    
-    if 'Kategori' in row_dict:
-        kategori = str(row_dict.get('Kategori', '')).strip()
-        template = template_bul(kategori)
-        if template:
-            anlasilir_veri['_Template_Basliktan_Silinecek_Ozellikler'] = template
-    
-    prompt = f"INPUT DATA:\n{json.dumps(anlasilir_veri, ensure_ascii=False)}"
-    
-    try:
-        response = model.generate_content(system_instruction + prompt)
-        return json.loads(response.text)
-    except:
-        return {"uyari": "API error", "temiz_baslik": row_dict.get('Başlık', 'ERROR')}
-
-# --- FILE UPLOAD ---
-uploaded_file = st.file_uploader("Upload your Excel file", type=['xlsx'])
+# --- FILE UPLOAD & START JOB ---
+uploaded_file = st.file_uploader("Excel dosyası yükle", type=["xlsx", "xls"])
 
 if uploaded_file is not None:
-    df = pd.read_excel(uploaded_file)
-    
-    # Skip technical header row if exists
-    if len(df) > 0 and 'Başlık' in df.columns:
-        if str(df.iloc[0].get('Başlık', '')).startswith('TITLE'):
-            df = df.iloc[1:].reset_index(drop=True)
-    
-    st.info(f"📋 Total Products: {len(df)} | ✅ Processed: {len(st.session_state.islenen_listesi)}")
+    st.info("📁 Dosya seçildi. İşlemi başlatmak için butona bas.")
 
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("🚀 Start / Continue Process", type="primary", use_container_width=True):
-            st.session_state.islem_aktif = True
+        if st.button("🚀 İşlemi Başlat / Devam", type="primary", use_container_width=True):
+            try:
+                existing_id = (st.session_state.job_id or "").strip()
+                if existing_id and existing_id != "None":
+                    # Sadece geçerli job_id ile GET; yoksa yeni job oluştur
+                    resp = requests.get(f"{backend_url}/jobs/{existing_id}", timeout=30)
+                    resp.raise_for_status()
+                    st.session_state.job_status = resp.json()
+                else:
+                    file_bytes = uploaded_file.getvalue()
+                    files = {
+                        "file": (
+                            uploaded_file.name,
+                            file_bytes,
+                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        )
+                    }
+                    resp = requests.post(f"{backend_url}/jobs", files=files, timeout=60)
+                    resp.raise_for_status()
+                    data = resp.json()
+                    new_id = (data.get("job_id") or "").strip()
+                    if new_id:
+                        st.session_state.job_id = new_id
+                        st.session_state.job_status = data
+                        st.session_state.uploaded_file_name = uploaded_file.name
+                    else:
+                        st.error("❌ Backend job_id döndürmedi.")
+                st.success("✅ İş backend’e gönderildi. Aşağıda durumu görebilirsin.")
+                st.rerun()
+            except requests.exceptions.ConnectionError:
+                st.error(f"❌ Backend’e bağlanılamadı. {backend_url} çalışıyor mu? (uvicorn api:app --reload)")
+            except Exception as e:
+                st.error(f"❌ Hata: {e}")
+
     with col2:
-        if st.button("🗑️ Reset Memory", use_container_width=True):
-            st.session_state.islenen_listesi = []
-            st.session_state.islem_aktif = False
+        if st.button("🗑️ Job’u Sıfırla", use_container_width=True):
+            st.session_state.job_id = None
+            st.session_state.job_status = None
+            st.session_state.uploaded_file_name = None
             st.rerun()
 
-    if st.session_state.islem_aktif:
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        
-        # Determine already processed SKUs
-        islenen_skular = [str(x.get('SHOP_SKU', '')) for x in st.session_state.islenen_listesi]
-        
-        for index, row in df.iterrows():
-            row_dict = row.to_dict()
-            sku = str(row_dict.get('SHOP_SKU', ''))
-            
-            # Skip if already processed
-            if sku in islenen_skular:
-                continue
-                
-            progress = (index + 1) / len(df)
-            progress_bar.progress(progress)
-            status_text.text(f"Processing ({index + 1}/{len(df)}): {row_dict.get('Başlık', '')[:50]}...")
-            
-            # Processing
-            gemini_cikti = urun_isle_streamlit(row_dict, model)
-            flat_result = row_dict.copy()
-            flat_result['Başlık'] = gemini_cikti.get("temiz_baslik", row_dict.get('Başlık', ''))
-            
-            # Update features based on output
-            ozellikler = gemini_cikti.get("duzenlenmis_ozellikler", {})
-            for key, val in ozellikler.items():
-                if key == "RAM": flat_result['RAM Bellek Boyutu'] = val
-                if key == "Disk": flat_result['Sabit disk kapasitesi'] = val
-            
-            # Ask for missing columns
-            for sutun in row_dict.keys():
-                if sutun not in {'Başlık', 'SHOP_SKU', 'Kategori'} and pd.isna(row_dict[sutun]):
-                    bulunan = gemini_eksik_sutun_sor_streamlit(row_dict.get('Başlık', ''), sutun, row_dict.get('Marka'))
-                    if bulunan:
-                        flat_result[sutun] = bulunan
-
-            flat_result['Warning'] = gemini_cikti.get("uyari", "")
-            
-            # --- PERSISTENCE: SAVE INSTANTLY ---
-            st.session_state.islenen_listesi.append(flat_result)
-            
-            # Rate limit protection
-            time.sleep(0.5)
-            
-        st.session_state.islem_aktif = False
-        st.success("✅ Process finished or no new products to process!")
-
-# --- RESULTS AND DOWNLOAD ---
-if st.session_state.islenen_listesi:
+# --- JOB STATUS (show even when no file selected) ---
+job_id = (st.session_state.job_id or "").strip()
+if job_id:
     st.divider()
-    res_df = pd.DataFrame(st.session_state.islenen_listesi)
-    st.subheader(f"📊 Processed Data ({len(res_df)} Products)")
-    st.dataframe(res_df, use_container_width=True)
-    
-    output = io.BytesIO()
-    res_df.to_excel(output, index=False)
-    output.seek(0)
-    
-    st.download_button(
-        label="📥 Download Cleaned Catalog",
-        data=output,
-        file_name="cleaned_catalog.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        type="primary"
-    )
+    st.subheader("📊 İş durumu")
+
+    # Refresh status (only with valid job_id so we never GET /jobs)
+    try:
+        resp = requests.get(f"{backend_url}/jobs/{job_id}", timeout=30)
+        resp.raise_for_status()
+        st.session_state.job_status = resp.json()
+    except Exception:
+        pass
+
+    status = st.session_state.job_status or {}
+    if status:
+        total = status.get("total", 0)
+        processed = status.get("processed", 0)
+        percentage = status.get("percentage", 0.0)
+        if st.session_state.get("uploaded_file_name"):
+            st.caption(f"📄 Dosya: {st.session_state.uploaded_file_name}")
+        st.write(f"**Job ID:** `{job_id}`")
+        st.write(f"**Toplam:** {total} ürün | **İşlenen:** {processed} (%{percentage})")
+
+        # Streamlit progress 0.0 - 1.0
+        st.progress(min(percentage / 100.0, 1.0))
+
+        if status.get("is_complete"):
+            st.success("✅ İşlem tamamlandı.")
+        else:
+            st.caption("İşlem arka planda (Celery worker) yapılıyor. İlerleme için **Durumu yenile** butonuna bas.")
+            if processed == 0 and total > 0:
+                st.warning("İlerleme hâlâ 0 mı? Celery worker terminalinde şunu çalıştır: `celery -A celery_app.celery_app worker --loglevel=info` — 'Task process_catalog_job received' görünmeli.")
+
+    if st.button("🔄 Durumu yenile"):
+        try:
+            resp = requests.get(f"{backend_url}/jobs/{job_id}", timeout=30)
+            resp.raise_for_status()
+            st.session_state.job_status = resp.json()
+            st.rerun()
+        except Exception as e:
+            st.error(f"❌ Yenileme hatası: {e}")
+
+    # Download when ready
+    if status.get("output_ready"):
+        try:
+            result_resp = requests.get(
+                f"{backend_url}/jobs/{job_id}/download",
+                timeout=120,
+            )
+            result_resp.raise_for_status()
+            buffer = io.BytesIO(result_resp.content)
+            res_df = pd.read_excel(buffer)
+
+            st.subheader(f"📊 İşlenen veri ({len(res_df)} ürün)")
+            st.dataframe(res_df, use_container_width=True)
+
+            buffer.seek(0)
+            st.download_button(
+                label="📥 Temiz katalogu indir",
+                data=buffer,
+                file_name=f"cleaned_catalog_{job_id}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                type="primary",
+            )
+        except Exception as e:
+            st.error(f"❌ İndirme hatası: {e}")

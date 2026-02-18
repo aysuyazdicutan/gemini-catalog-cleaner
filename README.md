@@ -32,18 +32,31 @@ python main.py
 
 3. İşlem tamamlandığında `temizlenmis_katalog.xlsx` dosyası oluşturulacaktır.
 
-### Streamlit Web Uygulaması
+### Streamlit Web Uygulaması (FastAPI + Celery + Redis ile)
 
-1. Streamlit uygulamasını başlatın:
+1. Gerekli servisleri başlatın:
+   - Redis (örnek macOS/Homebrew):
+     ```bash
+     redis-server
+     ```
+   - Celery worker:
+     ```bash
+     celery -A celery_app.celery_app worker --loglevel=info
+     ```
+   - FastAPI backend (uvicorn):
+     ```bash
+     uvicorn api:app --reload
+     ```
+
+2. Streamlit uygulamasını başlatın:
 ```bash
 streamlit run streamlit_app.py
 ```
 
-2. Tarayıcıda açılan sayfada:
-   - API key'inizi girin (veya Streamlit Cloud secrets kullanın)
+3. Tarayıcıda açılan sayfada:
    - Excel dosyanızı yükleyin
-   - "İşlemi Başlat" butonuna tıklayın
-   - İşlem tamamlandığında temizlenmiş dosyayı indirin
+   - "Start / Continue Process" butonuna tıklayın
+   - Arka planda FastAPI + Celery üzerinden işlenen dosya tamamlandığında temizlenmiş dosyayı indirin
 
 ### Streamlit Cloud Deployment
 

@@ -478,11 +478,21 @@ def urun_isle(row_dict, max_retries=3):
     # 4. Prompt oluştur
     prompt = f"GİRDİ VERİSİ:\n{json.dumps(anlasilir_veri, ensure_ascii=False)}"
     
-    # 5. API İsteği - Retry mekanizması ile
+    # 5. API İsteği - Retry mekanizması ile (ana thread'de; tam yanıt için)
     for attempt in range(max_retries):
         try:
             response = model.generate_content(system_instruction + prompt)
-            return json.loads(response.text)
+            data = json.loads(response.text)
+            # Boş/eksik yanıt kontrolü: temiz_baslik veya duzenlenmis_ozellikler dolu olmalı
+            if not data.get("temiz_baslik") and not data.get("duzenlenmis_ozellikler"):
+                raise ValueError("Gemini boş yanıt döndü")
+            return data
+        except (ValueError, json.JSONDecodeError) as e:
+            if attempt < max_retries - 1:
+                print(f"  ⏳ Boş/geçersiz yanıt, yeniden denenecek... ({attempt + 1}/{max_retries})", flush=True)
+                time.sleep(3)
+                continue
+            return {"uyari": "API boş yanıt döndü", "temiz_baslik": row_dict.get("Başlık", row_dict.get("TITLE__TR_TR", "")), "duzenlenmis_ozellikler": {}}
         except Exception as e:
             error_str = str(e)
             

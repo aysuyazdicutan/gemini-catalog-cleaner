@@ -110,6 +110,7 @@ def process_catalog_job(job_id: str) -> Dict[str, Any]:
         raise FileNotFoundError(f"Input file not found for job {job_id}")
 
     df = pd.read_excel(input_file)
+    print(f"[Job {job_id}] Başladı: toplam {len(df)} ürün", flush=True)
 
     # Skip technical header row if present
     if len(df) > 0 and "Başlık" in df.columns:
@@ -128,9 +129,14 @@ def process_catalog_job(job_id: str) -> Dict[str, Any]:
         existing = pd.read_excel(_output_path(job_id))
         results = existing.to_dict("records")
 
+    total_rows = len(df)
     for idx, row in df.iterrows():
         if idx in processed_indices:
             continue
+
+        # Railway/logda ilerleme görünsün
+        done_so_far = len(results)
+        print(f"[Job {job_id}] İşleniyor: satır {done_so_far + 1}/{total_rows} (index={idx})", flush=True)
 
         row_dict = row.to_dict()
         gemini_output = urun_isle(row_dict)

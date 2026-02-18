@@ -1,6 +1,4 @@
-#!/usr/bin/env bash
-# Tek container'da API + Celery worker (Railway vb. için)
-# Celery arka planda, uvicorn ön planda (PORT'u tutar)
+#!/bin/bash
 set -e
 PORT="${PORT:-8000}"
 celery -A celery_app.celery_app worker --loglevel=info &

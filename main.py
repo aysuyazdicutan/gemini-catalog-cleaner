@@ -172,16 +172,15 @@ def gemini_eksik_sutun_sor(urun_adi, eksik_sutun_basligi, marka=None, model_adi=
         # Sütun özel kuralları
         ek_talimat = ""
         if "program" in eksik_sutun_basligi.lower():
-            ek_talimat = "- Eğer farklı sitelerde farklı program sayıları varsa (örn: 14, 15, 15+1), en güncel ve en sık geçen resmi değeri seç.\n- Sadece rakam ver (örn: 15)."
+            ek_talimat = "- Eğer farklı değerler varsa (örn: 14, 15, 15+1), en güncel ve en sık geçen resmi değeri seç.\n- Sadece rakam ver (örn: 15)."
         
         soru = "\n".join(soru_parts) + f"""
 
 Bu ürün için "{eksik_sutun_basligi}" özelliği nedir?
 
 ÖNEMLİ KURALLAR:
-- WEB ARAMASI YAP: Google, Trendyol, MediaMarkt, Hepsiburada, Teknosa, Vatan Bilgisayar gibi güvenilir e-ticaret sitelerinde bu ürünü ara ve güncel bilgileri kontrol et.
-- İç bilgilerini değil, WEB'DEKİ GÜNCEL BİLGİLERİ kullan.
-- Eğer farklı sitelerde farklı değerler görürsen, en yaygın ve en güncel resmi değeri seç.
+- Ürün adı ve model bilgisinden bilinen değerleri kullan.
+- Eğer farklı değerler görürsen, en yaygın olanı seç.
 {ek_talimat}
 - Sadece değeri verin (açıklama, cümle, noktalama işareti YOK)
 - Sadece sayı + birim veya değer (örn: "2 l", "16 GB", "2200 w", "Siyah", "15 kg", "15")
@@ -445,6 +444,15 @@ GENEL ÇALIŞMA PRENSİBİ (TÜM KATEGORİLER İÇİN):
 }
 """
 
+# Kısa prompt: daha hızlı yanıt (varsayılan); GEMINI_FAST=0 ile tam prompt kullanılır
+system_instruction_compact = """Ürün katalog yöneticisi. Verilen JSON'daki ürün için: (1) Başlıktan özellikleri çıkar, boş sütunlara yaz; dolu sütunlara dokunma. (2) Marka ve template'deki özellikleri başlıktan sil, model/kod kalsın. (3) Birimler: GB/TB büyük harf, l/w/cm/kg küçük harf; sayı ile birim arasında boşluk. (4) Aralık/çoklu değerde tek değer seç (üst veya büyük). _Kategori_Bilgisi ve _Template_Basliktan_Silinecek_Ozellikler varsa uygula.
+Çıktı sadece şu JSON olsun:
+{"temiz_baslik": "...", "duzenlenmis_ozellikler": {"RAM_Boyutu": "...", "Disk_Kapasitesi": "...", "Renk_Temel": "...", "Isletim_Sistemi": "...", "Grafik_Karti": "...", "Islemci_Modeli": "...", "Ekran_Boyutu_Inc": "...", "Urun_Tipi": "...", "Kapasite": "...", "Guc": "...", "Frekans": "...", "Voltaj": "..." (kategoriye göre doldur)}, "uyari": "..."}
+"""
+
+def _get_system_instruction():
+    return system_instruction_compact if os.getenv("GEMINI_FAST", "1") == "1" else system_instruction
+
 def urun_isle(row_dict, max_retries=3):
     # 1. Excel'deki Türkçe sütun isimlerini teknik kodlara çevir
     teknik_veri = {}
@@ -479,9 +487,10 @@ def urun_isle(row_dict, max_retries=3):
     prompt = f"GİRDİ VERİSİ:\n{json.dumps(anlasilir_veri, ensure_ascii=False)}"
     
     # 5. API İsteği - Retry mekanizması ile (ana thread'de; tam yanıt için)
+    sys_instr = _get_system_instruction()
     for attempt in range(max_retries):
         try:
-            response = model.generate_content(system_instruction + prompt)
+            response = model.generate_content(sys_instr + prompt)
             data = json.loads(response.text)
             # Boş/eksik yanıt kontrolü: temiz_baslik veya duzenlenmis_ozellikler dolu olmalı
             if not data.get("temiz_baslik") and not data.get("duzenlenmis_ozellikler"):
@@ -805,7 +814,7 @@ def main():
                 # Sütun boş mu kontrol et
                 mevcut_deger = row_dict.get(sutun_adi, None)
                 if pd.isna(mevcut_deger) or (isinstance(mevcut_deger, str) and mevcut_deger.strip() == ''):
-                    # BOŞ SÜTUN BULUNDU - Gemini'ye sor (Gemini web'de arama yapacak)
+                    # BOŞ SÜTUN BULUNDU - Gemini'ye sor
                     bulunan_deger = None
                     
                     try:

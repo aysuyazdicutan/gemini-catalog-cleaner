@@ -61,6 +61,20 @@ Bu rehber, **FastAPI + Celery + Redis + Streamlit** mimarisini bulutta çalışt
 ## Notlar
 
 - **Redis URL:** Railway Redis eklentisinde **Variables** veya **Connect** kısmında görünür. `REDIS_PRIVATE_URL` veya `REDIS_URL` olabilir; aynı değeri `CELERY_BROKER_URL` ve `CELERY_RESULT_BACKEND` için kullanın, backend için sonuna `/1` ekleyin (broker `/0` veya aynı).
-- **Job dosyaları:** Şu an `jobs/` klasörü container içinde; deploy yenilenince silinir. Kalıcı depo istersen Railway Volume ekleyip `JOBS_BASE_DIR` ile bağlayabilirsiniz (ileride).
+- **Job dosyaları / 404 hatası:** Container yeniden başlayınca veya yeni deploy olunca disk sıfırlanır; `jobs/` silinir, bu yüzden "Durumu yenile" veya indirme **404 Not Found** verebilir. Job’ların **kalıcı** olması için aşağıdaki **Railway Volume** adımlarını uygulayın.
 - **Hata alırsan:** Railway’de servis **Logs**’a bakın; Celery ve uvicorn çıktıları orada görünür.
 - **"Failed to parse start command":** Start Command alanında sadece `bash start.sh` olmalı. Procfile’daki yorum satırı veya başka bir metin yapıştırdıysanız kaldırın; serviste **Settings** → **Deploy** → Start Command’ı silip boş bırakın (Procfile kullanılır) veya tam olarak `bash start.sh` yazın.
+
+---
+
+## 4. Job’ların kalıcı olması (404 önleme – Railway Volume)
+
+Container restart veya yeni deploy sonrası job’lar silindiği için **404 Not Found** alıyorsan, job dosyalarını kalıcı diske taşı:
+
+1. Railway projesinde **web servisine** (API + Celery çalışan servis) gir.
+2. **Variables** → **+ New Variable** → **Add a Variable**.
+3. **Raw Editor** ile ekle: `JOBS_BASE_DIR=/data/jobs`
+4. **Settings** → **Volumes** → **Add Volume** → Mount path: `/data` → **Add**.
+5. **Redeploy** yap (Deploy → **Redeploy** veya son commit’i tekrar pushla).
+
+Bundan sonra job verisi `/data/jobs` altında kalıcı olur; yenileme ve indirme 404 vermemeli.

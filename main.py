@@ -210,6 +210,78 @@ Cevap:"""
         print(f"  ⚠️ Gemini soru hatası: {str(e)[:100]}")
         return None
 
+
+def gemini_eksik_sutunlar_toplu_sor(urun_adi, eksik_sutunlar: list, marka=None, model_adi=None) -> dict:
+    """
+    Birden fazla eksik sütun için TEK API çağrısıyla tüm değerleri alır (performans).
+    
+    Args:
+        urun_adi: Ürün adı/başlığı
+        eksik_sutunlar: Eksik sütun başlıkları listesi (örn: ["RAM Bellek Boyutu", "Renk (temel)"])
+        marka: Marka bilgisi (opsiyonel)
+        model_adi: Model adı (opsiyonel)
+    
+    Returns:
+        {"Sütun Adı": "değer", ...} - sadece bulunanlar
+    """
+    if not eksik_sutunlar:
+        return {}
+    try:
+        import re
+        soru_parts = [f"Ürün adı: {urun_adi}"]
+        if marka:
+            soru_parts.append(f"Marka: {marka}")
+        if model_adi:
+            soru_parts.append(f"Model: {model_adi}")
+        if not model_adi:
+            model_match = re.search(r'[A-Z0-9]{4,}[-]?[A-Z0-9]{0,}', str(urun_adi))
+            if model_match and len(model_match.group(0)) >= 4:
+                soru_parts.append(f"Model Kodu: {model_match.group(0)}")
+
+        sutun_listesi = "\n".join(f"- {s}" for s in eksik_sutunlar)
+        soru = "\n".join(soru_parts) + f"""
+
+Aşağıdaki eksik özellikleri bu ürün için doldur. Her özellik için SADECE değeri ver (açıklama yok).
+
+Eksik özellikler:
+{sutun_listesi}
+
+KURALLAR:
+- Sadece JSON formatında cevap ver: {{"Özellik Adı": "değer", ...}}
+- Bilinmeyenler için "bilinmiyor" veya boş string yaz
+- Örnek format: {{"RAM Bellek Boyutu": "16 GB", "Renk (temel)": "Siyah"}}
+- Sayı + birim ayrı (16 GB, 2 l, 2200 w)
+- Başka metin yazma, sadece JSON
+
+Cevap:"""
+
+        print(f"  🤖 Gemini toplu soru: {len(eksik_sutunlar)} eksik sütun", flush=True)
+        response = chat_model.generate_content(soru)
+        text = response.text.strip()
+
+        # JSON parse (```json``` veya direkt JSON)
+        if "```" in text:
+            start = text.find("```") + 3
+            if "json" in text[:20].lower():
+                start = text.find("```json") + 7 if "```json" in text else start
+            end = text.find("```", start)
+            text = text[start:end] if end > start else text[start:].strip()
+        try:
+            sonuc = json.loads(text)
+            # Sadece eksik_sutunlar listesindekileri al, "bilinmiyor" olanları çıkar
+            cevap = {}
+            for sutun in eksik_sutunlar:
+                val = sonuc.get(sutun, "")
+                if val and isinstance(val, str) and "bilinmiyor" not in val.lower() and val.strip():
+                    cevap[sutun] = val.strip()
+            return cevap
+        except json.JSONDecodeError:
+            return {}
+    except Exception as e:
+        print(f"  ⚠️ Toplu soru hatası: {str(e)[:80]}", flush=True)
+        return {}
+
+
 def gemini_celiskic_coz(urun_adi, uyari_metni, baslik_degeri, ozellik_dict, marka=None):
     """
     Çelişkili bilgiler için Gemini'ye sorar ve doğru olanı belirler
@@ -787,52 +859,30 @@ def main():
                         else:
                             flat_result['Uyari'] = yeni_uyari
             
-            # TÜM BOŞ SÜTUNLAR İÇİN GEMINI'YE SOR ve DOLDUR
-            # Sistem sütunları ve zaten doldurulmuş sütunları atla
-            atlanacak_sutunlar = {
-                'Başlık',  # Bu zaten işleniyor
-                'SHOP_SKU',  # Sistem sütunu
-                'Uyari',  # Sistem sütunu
-                'Kategori',  # Kategori bilgisi
-            }
-            
-            urun_adi = row_dict.get('Başlık', '')
-            marka = row_dict.get('Marka', '')
-            
-            # Tüm sütunları kontrol et (row_dict'teki tüm anahtarlar)
-            for sutun_adi in row_dict.keys():
-                # Atlanacak sütunları atla
-                if sutun_adi in atlanacak_sutunlar:
-                    continue
-                
-                # Zaten flat_result'ta doldurulmuş sütunları atla (bir kez dolduruldu)
-                if sutun_adi in flat_result:
-                    mevcut_deger = flat_result.get(sutun_adi, None)
-                    if pd.notna(mevcut_deger) and (not isinstance(mevcut_deger, str) or mevcut_deger.strip() != ''):
-                        continue  # Zaten dolu, atla
-                
-                # Sütun boş mu kontrol et
-                mevcut_deger = row_dict.get(sutun_adi, None)
-                if pd.isna(mevcut_deger) or (isinstance(mevcut_deger, str) and mevcut_deger.strip() == ''):
-                    # BOŞ SÜTUN BULUNDU - Gemini'ye sor
-                    bulunan_deger = None
-                    
+            # TÜM BOŞ SÜTUNLAR İÇİN GEMINI'YE TEK SEFERDE SOR (toplu, hızlı)
+            if os.getenv("GEMINI_EKSIK_SUTUN", "1") == "1":
+                atlanacak_sutunlar = {'Başlık', 'SHOP_SKU', 'Uyari', 'Kategori'}
+                eksik_sutunlar = []
+                for sutun_adi in row_dict.keys():
+                    if sutun_adi in atlanacak_sutunlar:
+                        continue
+                    mevcut = flat_result.get(sutun_adi, row_dict.get(sutun_adi, None))
+                    if pd.notna(mevcut) and (not isinstance(mevcut, str) or mevcut.strip() != ''):
+                        continue
+                    eksik_sutunlar.append(sutun_adi)
+                if eksik_sutunlar:
                     try:
-                        bulunan_deger = gemini_eksik_sutun_sor(
-                            urun_adi=urun_adi,
-                            eksik_sutun_basligi=sutun_adi,
-                            marka=marka
+                        bulunanlar = gemini_eksik_sutunlar_toplu_sor(
+                            urun_adi=row_dict.get('Başlık', ''),
+                            eksik_sutunlar=eksik_sutunlar,
+                            marka=row_dict.get('Marka', ''),
                         )
-                        
-                        if bulunan_deger:
+                        for sutun_adi, bulunan_deger in bulunanlar.items():
                             flat_result[sutun_adi] = bulunan_deger
-                            print(f"  ✅ {sutun_adi} Gemini'den bulundu ve Excel'e yazıldı: {bulunan_deger}")
-                        else:
-                            print(f"  ❌ {sutun_adi} Gemini'de bulunamadı")
-                        
-                        time.sleep(1)  # Rate limiting
+                            print(f"  ✅ {sutun_adi} Gemini'den bulundu: {bulunan_deger}")
+                        time.sleep(float(os.getenv("GEMINI_DELAY", "0.3")))
                     except Exception as e:
-                        print(f"  ⚠️ Gemini sorgu hatası ({sutun_adi}): {str(e)[:100]}")
+                        print(f"  ⚠️ Gemini sorgu hatası: {str(e)[:100]}")
             
             sonuclar.append(flat_result)
             
@@ -867,8 +917,8 @@ def main():
             }
             sonuclar.append(flat_result)
         
-        # Rate limit için bekleme
-        time.sleep(3.0)
+        # Rate limit için bekleme (GEMINI_DELAY ile ayarlanabilir, varsayılan 0.5s)
+        time.sleep(float(os.getenv("GEMINI_DELAY", "0.5")))
     
     # Final kayıt - Sadece işlenmiş ürünleri kaydet, orijinal Excel yapısını koru
     if len(sonuclar) > 0:

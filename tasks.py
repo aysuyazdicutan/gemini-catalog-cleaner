@@ -102,7 +102,7 @@ def process_catalog_job(job_id: str) -> Dict[str, Any]:
     _project_root = Path(__file__).resolve().parent
     if str(_project_root) not in sys.path:
         sys.path.insert(0, str(_project_root))
-    from main import urun_isle, gemini_eksik_sutun_sor, gemini_celiskic_coz
+    from main import urun_isle, gemini_eksik_sutunlar_toplu_sor, gemini_celiskic_coz
 
     input_file = _input_path(job_id)
     status_file = _status_path(job_id)
@@ -216,28 +216,29 @@ def process_catalog_job(job_id: str) -> Dict[str, Any]:
 
         flat_result["Warning"] = yeni_uyari if yeni_uyari and yeni_uyari != "null" else ""
 
-        # Eksik (boş) sütunlar için gemini_eksik_sutun_sor
-        atlanacak_sutunlar = {"Başlık", "SHOP_SKU", "Warning", "Uyari", "Kategori"}
-        urun_adi = row_dict.get("Başlık", "")
-        marka = row_dict.get("Marka", "")
-
-        for sutun_adi in flat_result.keys():
-            if sutun_adi in atlanacak_sutunlar:
-                continue
-            mevcut = flat_result.get(sutun_adi, None)
-            if pd.notna(mevcut) and (not isinstance(mevcut, str) or mevcut.strip() != ""):
-                continue
-            try:
-                bulunan = gemini_eksik_sutun_sor(
-                    urun_adi=urun_adi,
-                    eksik_sutun_basligi=sutun_adi,
-                    marka=marka,
-                )
-                if bulunan:
-                    flat_result[sutun_adi] = bulunan
-                time.sleep(1)
-            except Exception as e:
-                print(f"  ⚠️ Gemini eksik sütun hatası ({sutun_adi}): {str(e)[:80]}", flush=True)
+        # Eksik (boş) sütunlar - tek API çağrısında toplu sorgula (GEMINI_EKSIK_SUTUN=0 ile kapatılabilir)
+        if os.getenv("GEMINI_EKSIK_SUTUN", "1") == "1":
+            atlanacak_sutunlar = {"Başlık", "SHOP_SKU", "Warning", "Uyari", "Kategori"}
+            eksik_sutunlar = []
+            for sutun_adi in flat_result.keys():
+                if sutun_adi in atlanacak_sutunlar:
+                    continue
+                mevcut = flat_result.get(sutun_adi, None)
+                if pd.notna(mevcut) and (not isinstance(mevcut, str) or mevcut.strip() != ""):
+                    continue
+                eksik_sutunlar.append(sutun_adi)
+            if eksik_sutunlar:
+                try:
+                    bulunanlar = gemini_eksik_sutunlar_toplu_sor(
+                        urun_adi=row_dict.get("Başlık", ""),
+                        eksik_sutunlar=eksik_sutunlar,
+                        marka=row_dict.get("Marka"),
+                    )
+                    for sutun, deger in bulunanlar.items():
+                        flat_result[sutun] = deger
+                    time.sleep(float(os.getenv("GEMINI_DELAY", "0.3")))
+                except Exception as e:
+                    print(f"  ⚠️ Gemini eksik sütun hatası: {str(e)[:80]}", flush=True)
 
         results.append(flat_result)
 

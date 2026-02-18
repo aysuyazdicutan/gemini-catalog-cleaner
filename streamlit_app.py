@@ -27,13 +27,14 @@ if "job_status" not in st.session_state:
 if "uploaded_file_name" not in st.session_state:
     st.session_state.uploaded_file_name = None
 
-# Streamlit Cloud'da st.secrets, local'de .env / BACKEND_URL
-_backend = "http://localhost:8000"
-if hasattr(st, "secrets") and st.secrets.get("BACKEND_URL"):
-    _backend = st.secrets["BACKEND_URL"]
-else:
-    _backend = os.getenv("BACKEND_URL", _backend)
-backend_url = _backend.rstrip("/")
+# Streamlit Cloud'da st.secrets, local'de .env / BACKEND_URL (secrets yoksa env/default)
+_backend = os.getenv("BACKEND_URL", "http://localhost:8000")
+try:
+    if hasattr(st, "secrets") and st.secrets.get("BACKEND_URL"):
+        _backend = st.secrets["BACKEND_URL"]
+except Exception:
+    pass
+backend_url = (_backend or "http://localhost:8000").rstrip("/")
 
 # --- BACKEND CHECK ---
 def backend_reachable():

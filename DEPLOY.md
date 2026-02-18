@@ -13,10 +13,11 @@ Bu rehber, **FastAPI + Celery + Redis + Streamlit** mimarisini bulutta çalışt
    - **Settings** → **Build:** Build Command boş bırakılabilir (veya `pip install -r requirements.txt`).  
    - **Settings** → **Deploy / Start Command:** Tam olarak `bash start.sh` yazın (başka metin veya yorum eklemeyin). Boş bırakırsanız Procfile’daki `web: bash start.sh` kullanılır.
    - **Settings** → **Root Directory:** Boş (repo kökü).
-5. **Environment variables ekle:** Aynı serviste **Variables** kısmına şunları ekleyin:
+5. **Environment variables ekle:** Aynı serviste **Variables** kısmına şunları **mutlaka** ekleyin:
    - `GEMINI_API_KEY` = Gemini API anahtarınız (Google AI Studio’dan).
-   - `CELERY_BROKER_URL` = Redis URL. Railway’de Redis ekledikten sonra **Redis servisine tıkla** → **Connect** veya **Variables**’da gösterilen URL. Örnek: `redis://default:xxx@containers-us-west-xxx.railway.app:6379`. Broker için aynı URL’i kullanın (veya sonuna `/0` ekleyin: `.../0`).
-   - `CELERY_RESULT_BACKEND` = Aynı Redis URL, farklı db: sonuna `/1` ekleyin. Örnek: `redis://default:xxx@...railway.app:6379/1`.
+   - `CELERY_BROKER_URL` = Railway Redis URL’i. **Redis servisine tıkla** → **Variables** veya **Connect** → `REDIS_URL` veya `REDIS_PRIVATE_URL` değerini kopyala. Örnek: `redis://default:şifre@containers-us-west-xxx.railway.app:6379`. Aynı URL’i kullan (sonuna `/0` ekleyebilirsin: `.../0`).
+   - `CELERY_RESULT_BACKEND` = Aynı Redis URL, sonuna `/1` ekle. Örnek: `redis://default:şifre@...railway.app:6379/1`.
+   - **ÖNEMLİ:** Logda `transport: redis://localhost:6379` görüyorsan bu iki değişken tanımlı değil veya yanlış serviste. Ana (web) serviste Variables’a ekle, Redeploy yap.
 6. **Public URL ver:** Serviste **Settings** → **Networking** → **Generate Domain**. Örnek: `geminiproj-api.up.railway.app`. Bu adresi kopyalayın; Streamlit’te `BACKEND_URL` olarak kullanacaksınız. **HTTPS** kullanın: `https://geminiproj-api.up.railway.app`.
 
 ---

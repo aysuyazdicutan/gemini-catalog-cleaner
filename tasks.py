@@ -253,7 +253,7 @@ def process_catalog_job(job_id: str) -> Dict[str, Any]:
     output_lang = _read_job_language(job_id)
     df = pd.read_excel(input_file)
     total_rows = len(df)
-    print(f"[Job {job_id}] Başladı: toplam {total_rows} ürün (paralel workers: {os.getenv('GEMINI_PARALLEL_WORKERS', '5')})", flush=True)
+    print(f"[Job {job_id}] Başladı: toplam {total_rows} ürün (paralel workers: {os.getenv('GEMINI_PARALLEL_WORKERS', '10')})", flush=True)
 
     # Skip technical header row if present
     if total_rows > 0 and "Başlık" in df.columns:
@@ -296,7 +296,7 @@ def process_catalog_job(job_id: str) -> Dict[str, Any]:
                 eksik_sutunlar.append(sutun_adi)
         to_process.append((idx, row_dict, eksik_sutunlar))
 
-    parallel_workers = int(os.getenv("GEMINI_PARALLEL_WORKERS", "5"))
+    parallel_workers = int(os.getenv("GEMINI_PARALLEL_WORKERS", "10"))
     parallel_workers = max(1, min(parallel_workers, 15))
 
     with ThreadPoolExecutor(max_workers=parallel_workers) as executor:

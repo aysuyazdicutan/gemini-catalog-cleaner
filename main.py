@@ -120,15 +120,14 @@ def template_bul(kategori_adi):
 
 genai.configure(api_key=API_KEY)
 
-# Gemini Flash - Hız ve Maliyet optimizasyonu için
+# gemini-2.0-flash-lite: Daha hızlı, daha ucuz. GEMINI_MODEL ile değiştirilebilir.
+_model_name = os.getenv("GEMINI_MODEL", "gemini-2.0-flash-lite")
 model = genai.GenerativeModel(
-    model_name="gemini-flash-latest",
+    model_name=_model_name,
     generation_config={"response_mime_type": "application/json"}
 )
-
-# Gemini Chat Model (aynı model)
 chat_model = genai.GenerativeModel(
-    "gemini-flash-latest",
+    _model_name,
     generation_config={"temperature": 0.1}
 )
 

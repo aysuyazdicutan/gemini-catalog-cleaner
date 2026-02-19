@@ -5,7 +5,7 @@ from typing import Dict, Any
 from pathlib import Path
 
 import pandas as pd
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
@@ -38,13 +38,20 @@ async def jobs_list_disallowed():
 
 
 @app.post("/jobs", response_model=Dict[str, Any])
-async def create_job(file: UploadFile = File(...)) -> Dict[str, Any]:
+async def create_job(
+    file: UploadFile = File(...),
+    language: str = Form("tr"),
+) -> Dict[str, Any]:
     """
     Create a new processing job from an uploaded Excel file.
-    Returns job_id and basic status.
+    language: output language for Gemini (tr, en, de, it). Default: tr
     """
     if not file.filename.lower().endswith((".xlsx", ".xls")):
         raise HTTPException(status_code=400, detail="Only .xlsx / .xls files are supported")
+
+    lang = (language or "tr").strip().lower()
+    if lang not in ("tr", "en", "de", "it"):
+        lang = "tr"
 
     try:
         content = await file.read()
@@ -52,7 +59,7 @@ async def create_job(file: UploadFile = File(...)) -> Dict[str, Any]:
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Failed to read Excel: {exc}") from exc
 
-    job_id = create_job_from_dataframe(df)
+    job_id = create_job_from_dataframe(df, language=lang)
 
     # Fire-and-forget Celery task
     process_catalog_job.delay(job_id)

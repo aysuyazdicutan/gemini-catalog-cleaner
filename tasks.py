@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -36,7 +37,11 @@ def _input_path(job_id: str) -> Path:
     return _job_dir(job_id) / "input.xlsx"
 
 
-def create_job_from_dataframe(df: pd.DataFrame) -> str:
+def _config_path(job_id: str) -> Path:
+    return _job_dir(job_id) / "config.json"
+
+
+def create_job_from_dataframe(df: pd.DataFrame, language: str = "tr") -> str:
     """
     Persist uploaded DataFrame as a new job and return job_id.
     """
@@ -57,7 +62,24 @@ def create_job_from_dataframe(df: pd.DataFrame) -> str:
     )
     status_df.to_csv(_status_path(job_id), index=False)
 
+    config_path = _config_path(job_id)
+    with open(config_path, "w", encoding="utf-8") as f:
+        json.dump({"language": language or "tr"}, f, ensure_ascii=False)
+
     return job_id
+
+
+def _read_job_language(job_id: str) -> str:
+    """Job'un dil ayarını oku. Varsayılan: tr"""
+    cfg = _config_path(job_id)
+    if not cfg.exists():
+        return "tr"
+    try:
+        with open(cfg, encoding="utf-8") as f:
+            data = json.load(f)
+        return data.get("language", "tr") or "tr"
+    except Exception:
+        return "tr"
 
 
 def read_job_status(job_id: str) -> Dict[str, Any]:
@@ -128,15 +150,24 @@ TERS_HARITA = {
 }
 
 
-def _process_single_product(idx: int, row_dict: Dict[str, Any], eksik_sutunlar: List[str]) -> Tuple[int, Dict[str, Any]]:
+def _process_single_product(
+    idx: int,
+    row_dict: Dict[str, Any],
+    eksik_sutunlar: List[str],
+    output_lang: str = "tr",
+) -> Tuple[int, Dict[str, Any]]:
     """
     Tek ürünü işler, (idx, flat_result) döner. ThreadPoolExecutor ile paralel çağrılabilir.
-    İlk çağrı: urun_isle. Kalan boş sütunlar için ek olarak gemini_eksik_sutunlar_toplu_sor.
+    output_lang: Gemini çıktı dili (tr, en, de, it)
     """
     import time
     from main import urun_isle, gemini_eksik_sutunlar_toplu_sor
 
-    gemini_output = urun_isle(row_dict, eksik_sutunlar=eksik_sutunlar if eksik_sutunlar else None)
+    gemini_output = urun_isle(
+        row_dict,
+        eksik_sutunlar=eksik_sutunlar if eksik_sutunlar else None,
+        output_lang=output_lang,
+    )
     features = gemini_output.get("duzenlenmis_ozellikler") or {}
 
     flat_result = row_dict.copy()
@@ -189,6 +220,7 @@ def _process_single_product(idx: int, row_dict: Dict[str, Any], eksik_sutunlar: 
                     urun_adi=row_dict.get("Başlık", ""),
                     eksik_sutunlar=kalan_eksik,
                     marka=row_dict.get("Marka"),
+                    output_lang=output_lang,
                 )
                 for sutun, deger in ek_doldurma.items():
                     if sutun in flat_result and deger:
@@ -218,6 +250,7 @@ def process_catalog_job(job_id: str) -> Dict[str, Any]:
     if not input_file.exists():
         raise FileNotFoundError(f"Input file not found for job {job_id}")
 
+    output_lang = _read_job_language(job_id)
     df = pd.read_excel(input_file)
     total_rows = len(df)
     print(f"[Job {job_id}] Başladı: toplam {total_rows} ürün (paralel workers: {os.getenv('GEMINI_PARALLEL_WORKERS', '5')})", flush=True)
@@ -268,7 +301,7 @@ def process_catalog_job(job_id: str) -> Dict[str, Any]:
 
     with ThreadPoolExecutor(max_workers=parallel_workers) as executor:
         futures = {
-            executor.submit(_process_single_product, idx, row_dict, eksik_sutunlar): idx
+            executor.submit(_process_single_product, idx, row_dict, eksik_sutunlar, output_lang): idx
             for idx, row_dict, eksik_sutunlar in to_process
         }
         batch_count = 0

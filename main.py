@@ -208,7 +208,7 @@ Cevap:"""
         return None
 
 
-def gemini_eksik_sutunlar_toplu_sor(urun_adi, eksik_sutunlar: list, marka=None, model_adi=None) -> dict:
+def gemini_eksik_sutunlar_toplu_sor(urun_adi, eksik_sutunlar: list, marka=None, model_adi=None, output_lang="tr") -> dict:
     """
     Birden fazla eksik sütun için TEK API çağrısıyla tüm değerleri alır (performans).
     
@@ -225,6 +225,7 @@ def gemini_eksik_sutunlar_toplu_sor(urun_adi, eksik_sutunlar: list, marka=None, 
         return {}
     try:
         import re
+        lang_name = OUTPUT_LANG_NAMES.get((output_lang or "tr").lower(), "Türkçe")
         soru_parts = [f"Ürün adı: {urun_adi}"]
         if marka:
             soru_parts.append(f"Marka: {marka}")
@@ -247,7 +248,7 @@ KURALLAR:
 - Sadece JSON formatında cevap ver: {{"Özellik Adı": "değer", ...}}
 - Bilinmeyenler için "bilinmiyor" yaz veya o sütunu dahil etme
 - Birimler: W (güç), bar, kg, GB (depolama), inç (ekran) - bu formatlarda yaz
-- Örnek: {{"RAM Bellek Boyutu": "16 GB", "Renk (temel)": "Siyah", "Maksimum güç": "2200 W"}}
+- Tüm değerleri {lang_name} dilinde yaz.
 - Mümkün olduğunca çok sütunu doldur; ürün adı/model/marka bilgisinden çıkarabildiğini yaz
 
 Cevap:"""
@@ -528,10 +529,15 @@ system_instruction_compact = """Ürün katalog yöneticisi. (1) Başlıktan öze
 Çıktı JSON: {"temiz_baslik": "...", "duzenlenmis_ozellikler": {...}, "uyari": "...", "eksik_sutun_degerleri": {"Sütun_Adı": "değer"}, "celiski_cozum": {...} veya null}
 """
 
+# Çıktı dili eşlemesi (tr, en, de, it -> dil adı)
+OUTPUT_LANG_NAMES = {"tr": "Türkçe", "en": "English", "de": "Deutsch", "it": "Italiano"}
+
+
 def _get_system_instruction():
     return system_instruction_compact if os.getenv("GEMINI_FAST", "1") == "1" else system_instruction
 
-def urun_isle(row_dict, eksik_sutunlar=None, max_retries=3):
+
+def urun_isle(row_dict, eksik_sutunlar=None, output_lang="tr", max_retries=3):
     """
     Ürün işleme: başlık temizleme, özellik çıkarma, eksik sütun doldurma ve çelişki çözümü TEK API çağrısında.
     
@@ -573,6 +579,11 @@ def urun_isle(row_dict, eksik_sutunlar=None, max_retries=3):
     if eksik_sutunlar:
         anlasilir_veri['_Eksik_Sutunlar'] = eksik_sutunlar
         anlasilir_veri['_Eksik_Notu'] = "Bu sütunlar boş. Mümkün olduğunca çok sütunu doldur; ürün adı/model/marka bilgisinden çıkarabildiğini yaz. Dayanağı olmayan tahmin yapma."
+
+    # 3c. Çıktı dili
+    lang_name = OUTPUT_LANG_NAMES.get((output_lang or "tr").lower(), "Türkçe")
+    anlasilir_veri['_Cikti_Dili'] = lang_name
+    anlasilir_veri['_Cikti_Dili_Notu'] = f"TÜM çıktıları ({lang_name}) dilinde ver: temiz_baslik, duzenlenmis_ozellikler, eksik_sutun_degerleri. Başlık, özellik değerleri, eksik sütun cevapları hep {lang_name} olmalı."
 
     # 4. Prompt oluştur
     prompt = f"GİRDİ VERİSİ:\n{json.dumps(anlasilir_veri, ensure_ascii=False)}"

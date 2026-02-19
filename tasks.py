@@ -131,8 +131,10 @@ TERS_HARITA = {
 def _process_single_product(idx: int, row_dict: Dict[str, Any], eksik_sutunlar: List[str]) -> Tuple[int, Dict[str, Any]]:
     """
     Tek ürünü işler, (idx, flat_result) döner. ThreadPoolExecutor ile paralel çağrılabilir.
+    İlk çağrı: urun_isle. Kalan boş sütunlar için ek olarak gemini_eksik_sutunlar_toplu_sor.
     """
-    from main import urun_isle
+    import time
+    from main import urun_isle, gemini_eksik_sutunlar_toplu_sor
 
     gemini_output = urun_isle(row_dict, eksik_sutunlar=eksik_sutunlar if eksik_sutunlar else None)
     features = gemini_output.get("duzenlenmis_ozellikler") or {}
@@ -169,6 +171,31 @@ def _process_single_product(idx: int, row_dict: Dict[str, Any], eksik_sutunlar: 
                 not isinstance(deger, str) or "bilinmiyor" not in str(deger).lower()
             ):
                 flat_result[sutun] = str(deger).strip() if isinstance(deger, str) else deger
+
+    # Hâlâ boş kalan sütunlar için ek odaklı çağrı (eskisi gibi daha çok doldurur)
+    if os.getenv("GEMINI_EKSIK_SUTUN", "1") == "1":
+        atla = {"Başlık", "SHOP_SKU", "Warning", "Uyari", "Kategori"}
+        kalan_eksik = []
+        for sutun_adi in flat_result.keys():
+            if sutun_adi in atla:
+                continue
+            mevcut = flat_result.get(sutun_adi, None)
+            if pd.notna(mevcut) and (not isinstance(mevcut, str) or str(mevcut).strip() != ""):
+                continue
+            kalan_eksik.append(sutun_adi)
+        if kalan_eksik:
+            try:
+                ek_doldurma = gemini_eksik_sutunlar_toplu_sor(
+                    urun_adi=row_dict.get("Başlık", ""),
+                    eksik_sutunlar=kalan_eksik,
+                    marka=row_dict.get("Marka"),
+                )
+                for sutun, deger in ek_doldurma.items():
+                    if sutun in flat_result and deger:
+                        flat_result[sutun] = str(deger).strip() if isinstance(deger, str) else deger
+                time.sleep(float(os.getenv("GEMINI_DELAY", "0.2")))
+            except Exception:
+                pass
 
     return (idx, flat_result)
 

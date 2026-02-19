@@ -245,10 +245,10 @@ Eksik özellikler:
 
 KURALLAR:
 - Sadece JSON formatında cevap ver: {{"Özellik Adı": "değer", ...}}
-- Bilinmeyenler için "bilinmiyor" veya boş string yaz
-- Örnek format: {{"RAM Bellek Boyutu": "16 GB", "Renk (temel)": "Siyah"}}
-- Sayı + birim ayrı (16 GB, 2 l, 2200 w)
-- Başka metin yazma, sadece JSON
+- Bilinmeyenler için "bilinmiyor" yaz veya o sütunu dahil etme
+- Birimler: W (güç), bar, kg, GB (depolama), inç (ekran) - bu formatlarda yaz
+- Örnek: {{"RAM Bellek Boyutu": "16 GB", "Renk (temel)": "Siyah", "Maksimum güç": "2200 W"}}
+- Mümkün olduğunca çok sütunu doldur; ürün adı/model/marka bilgisinden çıkarabildiğini yaz
 
 Cevap:"""
 
@@ -494,11 +494,11 @@ GENEL ÇALIŞMA PRENSİBİ (TÜM KATEGORİLER İÇİN):
    - Genel kuralları (marka silme, kod koruma, vb.) uygula
 
 10. **EKSİK SÜTUNLAR (_Eksik_Sutunlar varsa):**
-   - _Eksik_Sutunlar listesindeki sütunlar boş; bilgini biliyorsan doldur
-   - Ürün adı, model kodu, marka bilgisinden emin olduğun değerleri "eksik_sutun_degerleri"nde Excel sütun adıyla ver
-   - Format: Sadece değer (açıklama yok). Birimler: W, bar, kg, GB, inç formatında. Örn: "16 GB", "2 l", "2200 W", "15.6 inç", "5 bar", "Siyah"
-   - BİLMEDİĞİN SÜTUNU BOŞ BIRAK: Emin değilsen veya bilmiyorsan o sütunu doldurma; yanlış bilgi girme
-   - Sadece kesin bildiğin değerleri yaz
+   - _Eksik_Sutunlar listesindeki sütunlar boş; mümkün olduğunca çok sütunu doldur
+   - Ürün adı, model kodu, marka, kategori bilgisinden çıkarabildiğin tüm değerleri yaz
+   - "eksik_sutun_degerleri"nde Excel sütun adıyla ver. Format: W, bar, kg, GB, inç kuralına uy
+   - Dayanağı olmayan tahmin yapma; ama ürün bilgisi bir değere işaret ediyorsa (örn. model kodu, başlık) doldur
+   - Hiçbir ipucu yoksa boş bırak
 
 11. **ÇELİŞKİ ÇÖZÜMÜ (uyari ile birlikte):**
    - Çelişki tespit ettiğinde sadece uyari verme; aynı yanıtta "celiski_cozum" ile doğru değeri belirt
@@ -524,7 +524,7 @@ GENEL ÇALIŞMA PRENSİBİ (TÜM KATEGORİLER İÇİN):
 """
 
 # Kısa prompt: daha hızlı yanıt (varsayılan); GEMINI_FAST=0 ile tam prompt kullanılır
-system_instruction_compact = """Ürün katalog yöneticisi. (1) Başlıktan özellikleri çıkar, boş sütunlara yaz; dolu sütunlara dokunma. (2) Marka ve template'deki özellikleri başlıktan sil, model/kod kalsın. (3) Ürün Tipi: OLABİLDİĞİNCE GENEL tut (örn. "Klima" yaz, "X Klima" değil; "X" gibi nitelikler başlığın sonuna). (4) Birimler: W, bar, kg, GB, inç formatında yaz (örn: "2200 W", "16 GB", "15.6 inç"). (5) Aralık/çoklu değerde tek değer seç. (6) _Eksik_Sutunlar: Bildiğin sütunları doldur; bilmediğini boş bırak, yanlış girme. "eksik_sutun_degerleri"nde sadece emin olduklarını ver. (7) Çelişki varsa celiski_cozum ekle.
+system_instruction_compact = """Ürün katalog yöneticisi. (1) Başlıktan özellikleri çıkar, boş sütunlara yaz; dolu sütunlara dokunma. (2) Marka ve template'deki özellikleri başlıktan sil, model/kod kalsın. (3) Ürün Tipi: OLABİLDİĞİNCE GENEL tut (örn. "Klima" yaz, "X Klima" değil; "X" gibi nitelikler başlığın sonuna). (4) Birimler: W, bar, kg, GB, inç formatında yaz (örn: "2200 W", "16 GB", "15.6 inç"). (5) Aralık/çoklu değerde tek değer seç. (6) _Eksik_Sutunlar: Mümkün olduğunca çok sütunu doldur; ürün adı/model/marka bilgisinden çıkarabildiğini yaz. Dayanağı olmayan tahmin yapma; ipucu varsa doldur. (7) Çelişki varsa celiski_cozum ekle.
 Çıktı JSON: {"temiz_baslik": "...", "duzenlenmis_ozellikler": {...}, "uyari": "...", "eksik_sutun_degerleri": {"Sütun_Adı": "değer"}, "celiski_cozum": {...} veya null}
 """
 
@@ -572,7 +572,7 @@ def urun_isle(row_dict, eksik_sutunlar=None, max_retries=3):
     # 3b. Eksik sütunları ekle (tek çağrıda doldurulsun)
     if eksik_sutunlar:
         anlasilir_veri['_Eksik_Sutunlar'] = eksik_sutunlar
-        anlasilir_veri['_Eksik_Notu'] = "Bu sütunlar boş. Bildiğini doldur; bilmediğini boş bırak, yanlış bilgi girme. eksik_sutun_degerleri'nde sadece emin olduğun değerleri ver."
+        anlasilir_veri['_Eksik_Notu'] = "Bu sütunlar boş. Mümkün olduğunca çok sütunu doldur; ürün adı/model/marka bilgisinden çıkarabildiğini yaz. Dayanağı olmayan tahmin yapma."
 
     # 4. Prompt oluştur
     prompt = f"GİRDİ VERİSİ:\n{json.dumps(anlasilir_veri, ensure_ascii=False)}"

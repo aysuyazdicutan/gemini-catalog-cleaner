@@ -407,31 +407,31 @@ GENEL ÇALIŞMA PRENSİBİ (TÜM KATEGORİLER İÇİN):
    - Ürün kodları (CNT ile başlayanlar, model kodları) BAŞLIKTA KALSIN
    - Geriye sadece model adı, ürün kodu ve template'de olmayan özellikler kalsın
 
-4. **ÜRÜN TİPİ OLUŞTURMA (KRİTİK - HER ZAMAN UYGULA):**
+4. **ÜRÜN TİPİ OLUŞTURMA (KRİTİK - OLABİLDİĞİNCE GENEL TUT):**
 
    - Ürün Tipi sütunu YOKSA veya BOŞSA → Başlıktan ve kategoriden analiz ederek ÜRÜN TİPİ OLUŞTUR
-   - ÜRÜN TİPLERİ ÇOK ÇEŞİTLİ OLMAMALI! Az sayıda genel kategori kullan:
-     * Laptop kategorisi için: "Laptop" veya "Gaming Laptop" (sadece gaming varsa)
-     * KETTLE/SU ISITICISI için: "Su Isıtıcısı"
-     * Diğer kategoriler için: Kategorinin genel adını kullan (ör: "Telefon", "Tablet", "Monitör")
-   - ÖZEL DURUMLAR: Eğer ürün hiçbir genel kategoriye uymuyorsa ve farklı bir tip gerekiyorsa, o zaman yeni tip oluştur
-   - AMA DİKKAT: Her küçük fark için yeni tip oluşturma! Sadece gerçekten farklı kategoriler için ayrı tip kullan
-   - ÖRNEK: "Gaming Laptop", "Office Laptop", "Ultrabook" → Hepsini "Laptop" yap (gaming varsa "Gaming Laptop")
-   - ÖRNEK: "Cam Su Isıtıcısı", "Çelik Su Isıtıcısı" → Hepsini "Su Isıtıcısı" yap
+   - ÜRÜN TİPİ MUTLAKA GENEL OLMALI! Sadece ana kategori adını yaz:
+     * "X Klima" → Ürün Tipi: "Klima" (sadece "Klima"), "X" gibi nitelikler BAŞLIĞIN EN SONUNA eklenir
+     * "Inverter Klima", "Dual Klima" → Ürün Tipi: "Klima"; başlık sonuna "Inverter", "Dual" vb. ekle
+     * "Cam Su Isıtıcısı", "Çelik Su Isıtıcısı" → Ürün Tipi: "Su Isıtıcısı"; "Cam", "Çelik" başlıkta kalır
+     * Laptop kategorisi: "Laptop" veya "Gaming Laptop" (sadece gaming belirginse)
+     * Diğer kategoriler: Genel ad kullan (ör: "Telefon", "Tablet", "Monitör", "Klima", "Buzdolabı")
+   - Olası eklemeler/nitelikler (Inverter, X, Pro, Plus, Mini vb.) ÜRÜN TİPİNE DEĞİL, BAŞLIĞIN SONUNA yaz
+   - ÖRNEK: "X Klima 12000 BTU" → Ürün Tipi: "Klima", Başlık: "Model123 12000 BTU X"
 
 5. **DEĞER STANDARDİZASYONU (ARALIK/ÇOKLU DEĞER İÇİN - KRİTİK - ÖĞREN VE UYGULA):**
 
    ARALIK/ÇOKLU DEĞER GÖRDÜĞÜNDE MUTLAKA TEK DEĞER SEÇ:
    
-   - "2000 W ve altı" → "2000 w" (üst değeri seç, "ve altı" ifadesini kaldır, küçük harf)
-   - "2000 W ve üstü" → "2000 w" (değeri koru, "ve üstü" ifadesini kaldır, küçük harf)
+   - "2000 W ve altı" → "2000 W" (üst değeri seç, "ve altı" ifadesini kaldır)
+   - "2000 W ve üstü" → "2000 W" (değeri koru, "ve üstü" ifadesini kaldır)
    - "50 Hz/60 Hz" → "60 Hz" (büyük olanı seç - frekans için genelde 60 Hz tercih edilir)
    - "40/50 Hz" → "50 Hz" (büyük olanı seç)
    - "1-2 L" veya "1,8-2 L" → "2 l" (üst değeri seç, küçük harf)
    - "1.5-2.0 L" → "2 l" (üst değeri seç, küçük harf)
    - "220-240 V" → "220 V" (alt değeri seç - standart voltaj) veya "240 V" (üst değer)
    - "16GB/32GB" → "32 GB" (büyük olanı seç, bilgisayar birimi büyük harf)
-   - "501-1000 Watt" → "1000 w" (üst değeri seç, küçük harf)
+   - "501-1000 Watt" → "1000 W" (üst değeri seç)
    - "15+1 Program" veya "16 Program" → "16" (Sadece rakam, ek özellikleri dahil et)
    - "15 Programlı", "15 Program" → "15" (Sadece rakam)
    
@@ -454,7 +454,7 @@ GENEL ÇALIŞMA PRENSİBİ (TÜM KATEGORİLER İÇİN):
    
    KETTLE/SU ISITICISI için:
    - Kapasite (Hacimsel kapasite sütununa yazılacak): "1.8Lt" veya "1.8 Lt" veya "2 L" veya "1-2 L" → "2 l" formatında (aralık varsa üst değer, sayı ve birim ayrı, küçük harf)
-   - Güç (Maksimum güç sütununa yazılacak): "2200W" veya "2000 W ve altı" → "2000 w" (tek değer, "ve altı" kaldır, küçük harf)
+   - Güç (Maksimum güç sütununa yazılacak): "2200W" veya "2000 W ve altı" → "2000 W" (tek değer, "ve altı" kaldır)
    - Frekans (Frekans sütununa yazılacak): "50 Hz/60 Hz" → "60 Hz" (büyük olanı seç)
    - Voltaj (Giriş Voltajı sütununa yazılacak): "220-240 V" → "220 V" (standart değer) veya "240 V" (üst değer)
    - Malzeme: "Çelik", "Inox" gibi bilgileri koru
@@ -468,20 +468,16 @@ GENEL ÇALIŞMA PRENSİBİ (TÜM KATEGORİLER İÇİN):
    - Kısaltmaları aç (W11P → Windows 11 Pro, vb.)
    - Çelişkileri tespit et ve uyarı ver (özellikle kritik özellikler için)
    - Format standardizasyonu (16gb → 16 GB, 1.8 Lt → 1.8 Litre, vb.)
-   - BİRİM AYIRMA (KRİTİK - HARF BÜYÜKLÜĞÜ KURALI): Sayıları birimlerinden AYIR ve KISALTMA KULLAN:
-     * BİLGİSAYAR BİRİMLERİ BÜYÜK HARF: GB, TB, MB, KB
-       - "15GB" veya "15 gb" → "15 GB" (büyük harf)
-       - "1.5TB" veya "1.5 tb" → "1.5 TB" (büyük harf)
-       - "512MB" → "512 MB" (büyük harf)
-     * FİZİKSEL BİRİMLER KÜÇÜK HARF: l, g, kg, cm, m, w
-       - "3l" veya "3 L" veya "3 litre" → Özellik sütununa "3 l" (küçük harf, sayı ve birim ayrı)
-       - "2 l" veya "2 L" veya "2 litre" → Özellik sütununa "2 l" (küçük harf, sayı ve birim ayrı)
-       - "2000W" veya "2000 w" → "2000 w" (küçük harf)
-       - "40cm" veya "40 CM" → "40 cm" (küçük harf)
-       - "500g" veya "500 G" → "500 g" (küçük harf)
-       - "2kg" veya "2 KG" → "2 kg" (küçük harf)
-     * Genel kural: Sayı ile birim arasında BOŞLUK OLMALI
-     * ÖNEMLİ: Bilgisayar birimleri (GB, TB, MB, KB) BÜYÜK HARF, fiziksel birimler (l, g, kg, cm, m, w) KÜÇÜK HARF
+   - BİRİM YAZIMI (KRİTİK - BU FORMATLARI KULLAN): Sayı ile birim arasında BOŞLUK olmalı.
+     * BİRİM FORMATLARI:
+       - Güç (Watt): "W" (büyük harf) → "2200 W", "2000 W"
+       - Basınç: "bar" → "5 bar"
+       - Ağırlık: "kg" → "2 kg", "500 g"
+       - Depolama: "GB", "TB", "MB", "KB" (büyük harf) → "16 GB", "1 TB"
+       - Ekran boyutu: "inç" → "15.6 inç"
+       - Hacim: "l" → "2 l"
+       - Uzunluk: "cm", "m" → "40 cm"
+     * Örnekler: "2200W"→"2200 W", "16gb"→"16 GB", "15.6inc"→"15.6 inç", "2kg"→"2 kg", "5bar"→"5 bar"
    - İngilizce renkleri Türkçeye çevir (Red → Kırmızı, Space Grey → Uzay Grisi)
    - Ürün kodları (CNT ile başlayanlar, model kodları) BAŞLIKTA KALSIN
    - ÖNEMLİ: Özellik sütunlarına yazdığın tüm bilgiler (kapasite, güç, boyut, RAM, Disk vb.) başlıktan SİLİNMELİ
@@ -498,9 +494,11 @@ GENEL ÇALIŞMA PRENSİBİ (TÜM KATEGORİLER İÇİN):
    - Genel kuralları (marka silme, kod koruma, vb.) uygula
 
 10. **EKSİK SÜTUNLAR (_Eksik_Sutunlar varsa):**
-   - _Eksik_Sutunlar listesindeki sütunlar boş; ürün adı/model/marka bilgisinden bu özellikleri araştırıp doldur
-   - Bilinmeyenler için "bilinmiyor" veya boş bırakma
-   - değerleri "eksik_sutun_degerleri" alanında Excel sütun adıyla eşleştir: {"Sütun Adı": "değer", ...}
+   - _Eksik_Sutunlar listesindeki sütunlar boş; bilgini biliyorsan doldur
+   - Ürün adı, model kodu, marka bilgisinden emin olduğun değerleri "eksik_sutun_degerleri"nde Excel sütun adıyla ver
+   - Format: Sadece değer (açıklama yok). Birimler: W, bar, kg, GB, inç formatında. Örn: "16 GB", "2 l", "2200 W", "15.6 inç", "5 bar", "Siyah"
+   - BİLMEDİĞİN SÜTUNU BOŞ BIRAK: Emin değilsen veya bilmiyorsan o sütunu doldurma; yanlış bilgi girme
+   - Sadece kesin bildiğin değerleri yaz
 
 11. **ÇELİŞKİ ÇÖZÜMÜ (uyari ile birlikte):**
    - Çelişki tespit ettiğinde sadece uyari verme; aynı yanıtta "celiski_cozum" ile doğru değeri belirt
@@ -526,7 +524,7 @@ GENEL ÇALIŞMA PRENSİBİ (TÜM KATEGORİLER İÇİN):
 """
 
 # Kısa prompt: daha hızlı yanıt (varsayılan); GEMINI_FAST=0 ile tam prompt kullanılır
-system_instruction_compact = """Ürün katalog yöneticisi. Verilen JSON'daki ürün için: (1) Başlıktan özellikleri çıkar, boş sütunlara yaz; dolu sütunlara dokunma. (2) Marka ve template'deki özellikleri başlıktan sil, model/kod kalsın. (3) Birimler: GB/TB büyük harf, l/w/cm/kg küçük harf; sayı ile birim arasında boşluk. (4) Aralık/çoklu değerde tek değer seç (üst veya büyük). (5) _Eksik_Sutunlar varsa: ürün adı/model bilgisinden bu sütunları doldur, "eksik_sutun_degerleri"nde Excel sütun adıyla ver. (6) Çelişki varsa "celiski_cozum": {ozellik_adi, dogru_deger, kaynak} ekle; yoksa null. _Kategori_Bilgisi ve _Template_Basliktan_Silinecek_Ozellikler varsa uygula.
+system_instruction_compact = """Ürün katalog yöneticisi. (1) Başlıktan özellikleri çıkar, boş sütunlara yaz; dolu sütunlara dokunma. (2) Marka ve template'deki özellikleri başlıktan sil, model/kod kalsın. (3) Ürün Tipi: OLABİLDİĞİNCE GENEL tut (örn. "Klima" yaz, "X Klima" değil; "X" gibi nitelikler başlığın sonuna). (4) Birimler: W, bar, kg, GB, inç formatında yaz (örn: "2200 W", "16 GB", "15.6 inç"). (5) Aralık/çoklu değerde tek değer seç. (6) _Eksik_Sutunlar: Bildiğin sütunları doldur; bilmediğini boş bırak, yanlış girme. "eksik_sutun_degerleri"nde sadece emin olduklarını ver. (7) Çelişki varsa celiski_cozum ekle.
 Çıktı JSON: {"temiz_baslik": "...", "duzenlenmis_ozellikler": {...}, "uyari": "...", "eksik_sutun_degerleri": {"Sütun_Adı": "değer"}, "celiski_cozum": {...} veya null}
 """
 
@@ -574,7 +572,7 @@ def urun_isle(row_dict, eksik_sutunlar=None, max_retries=3):
     # 3b. Eksik sütunları ekle (tek çağrıda doldurulsun)
     if eksik_sutunlar:
         anlasilir_veri['_Eksik_Sutunlar'] = eksik_sutunlar
-        anlasilir_veri['_Eksik_Notu'] = "Bu sütunlar boş; ürün adı/model/marka bilgisinden değerleri bul ve eksik_sutun_degerleri'nde Excel adıyla ver. Bilinmiyorsa 'bilinmiyor' yazma, atla."
+        anlasilir_veri['_Eksik_Notu'] = "Bu sütunlar boş. Bildiğini doldur; bilmediğini boş bırak, yanlış bilgi girme. eksik_sutun_degerleri'nde sadece emin olduğun değerleri ver."
 
     # 4. Prompt oluştur
     prompt = f"GİRDİ VERİSİ:\n{json.dumps(anlasilir_veri, ensure_ascii=False)}"

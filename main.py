@@ -126,13 +126,10 @@ model = genai.GenerativeModel(
     generation_config={"response_mime_type": "application/json"}
 )
 
-# Gemini Chat Model (eksik sütunlar için soru-cevap için)
-# Temperature=0.1 ile daha deterministik/tutarlı sonuçlar almak için
+# Gemini Chat Model (aynı model)
 chat_model = genai.GenerativeModel(
-    'gemini-flash-latest',
-    generation_config={
-        "temperature": 0.1,
-    }
+    "gemini-flash-latest",
+    generation_config={"temperature": 0.1}
 )
 
 def gemini_eksik_sutun_sor(urun_adi, eksik_sutun_basligi, marka=None, model_adi=None):
@@ -500,6 +497,16 @@ GENEL ÇALIŞMA PRENSİBİ (TÜM KATEGORİLER İÇİN):
    - O kategorinin standart formatlarını uygula
    - Genel kuralları (marka silme, kod koruma, vb.) uygula
 
+10. **EKSİK SÜTUNLAR (_Eksik_Sutunlar varsa):**
+   - _Eksik_Sutunlar listesindeki sütunlar boş; ürün adı/model/marka bilgisinden bu özellikleri araştırıp doldur
+   - Bilinmeyenler için "bilinmiyor" veya boş bırakma
+   - değerleri "eksik_sutun_degerleri" alanında Excel sütun adıyla eşleştir: {"Sütun Adı": "değer", ...}
+
+11. **ÇELİŞKİ ÇÖZÜMÜ (uyari ile birlikte):**
+   - Çelişki tespit ettiğinde sadece uyari verme; aynı yanıtta "celiski_cozum" ile doğru değeri belirt
+   - celiski_cozum: {"ozellik_adi": "Isletim_Sistemi", "dogru_deger": "Windows 11", "kaynak": "baslik" veya "ozellik"}
+   - Çelişki yoksa celiski_cozum: null
+
 ÖNEMLİ: Önce başlıktan özellikleri çıkar ve özellik sütunlarına yaz, SONRA başlığı temizle!
 
 ÇIKTIYI ŞU JSON FORMATINDA VER:
@@ -512,20 +519,29 @@ GENEL ÇALIŞMA PRENSİBİ (TÜM KATEGORİLER İÇİN):
     // Örnek KETTLE: Kapasite (Hacimsel kapasite için), Guc veya Güç (Maksimum güç için), Frekans, Voltaj (Giriş Voltajı için), Malzeme, Renk, Urun_Tipi
     // Yeni kategoriler için: O kategorinin tipik özelliklerini çıkar
   },
-  "uyari": "null veya çelişki/uyuşmazlık açıklaması"
+  "uyari": "null veya çelişki/uyuşmazlık açıklaması",
+  "eksik_sutun_degerleri": {"Sütun_Adı": "değer", ...} veya {} (_Eksik_Sutunlar yoksa boş),
+  "celiski_cozum": {"ozellik_adi": "...", "dogru_deger": "...", "kaynak": "baslik|ozellik"} veya null
 }
 """
 
 # Kısa prompt: daha hızlı yanıt (varsayılan); GEMINI_FAST=0 ile tam prompt kullanılır
-system_instruction_compact = """Ürün katalog yöneticisi. Verilen JSON'daki ürün için: (1) Başlıktan özellikleri çıkar, boş sütunlara yaz; dolu sütunlara dokunma. (2) Marka ve template'deki özellikleri başlıktan sil, model/kod kalsın. (3) Birimler: GB/TB büyük harf, l/w/cm/kg küçük harf; sayı ile birim arasında boşluk. (4) Aralık/çoklu değerde tek değer seç (üst veya büyük). _Kategori_Bilgisi ve _Template_Basliktan_Silinecek_Ozellikler varsa uygula.
-Çıktı sadece şu JSON olsun:
-{"temiz_baslik": "...", "duzenlenmis_ozellikler": {"RAM_Boyutu": "...", "Disk_Kapasitesi": "...", "Renk_Temel": "...", "Isletim_Sistemi": "...", "Grafik_Karti": "...", "Islemci_Modeli": "...", "Ekran_Boyutu_Inc": "...", "Urun_Tipi": "...", "Kapasite": "...", "Guc": "...", "Frekans": "...", "Voltaj": "..." (kategoriye göre doldur)}, "uyari": "..."}
+system_instruction_compact = """Ürün katalog yöneticisi. Verilen JSON'daki ürün için: (1) Başlıktan özellikleri çıkar, boş sütunlara yaz; dolu sütunlara dokunma. (2) Marka ve template'deki özellikleri başlıktan sil, model/kod kalsın. (3) Birimler: GB/TB büyük harf, l/w/cm/kg küçük harf; sayı ile birim arasında boşluk. (4) Aralık/çoklu değerde tek değer seç (üst veya büyük). (5) _Eksik_Sutunlar varsa: ürün adı/model bilgisinden bu sütunları doldur, "eksik_sutun_degerleri"nde Excel sütun adıyla ver. (6) Çelişki varsa "celiski_cozum": {ozellik_adi, dogru_deger, kaynak} ekle; yoksa null. _Kategori_Bilgisi ve _Template_Basliktan_Silinecek_Ozellikler varsa uygula.
+Çıktı JSON: {"temiz_baslik": "...", "duzenlenmis_ozellikler": {...}, "uyari": "...", "eksik_sutun_degerleri": {"Sütun_Adı": "değer"}, "celiski_cozum": {...} veya null}
 """
 
 def _get_system_instruction():
     return system_instruction_compact if os.getenv("GEMINI_FAST", "1") == "1" else system_instruction
 
-def urun_isle(row_dict, max_retries=3):
+def urun_isle(row_dict, eksik_sutunlar=None, max_retries=3):
+    """
+    Ürün işleme: başlık temizleme, özellik çıkarma, eksik sütun doldurma ve çelişki çözümü TEK API çağrısında.
+    
+    Args:
+        row_dict: Ürün verisi (Excel satırı)
+        eksik_sutunlar: Boş Excel sütun adları listesi (örn. ["RAM Bellek Boyutu", "Renk (temel)"])
+        max_retries: API retry sayısı
+    """
     # 1. Excel'deki Türkçe sütun isimlerini teknik kodlara çevir
     teknik_veri = {}
     for excel_key, deger in row_dict.items():
@@ -554,6 +570,11 @@ def urun_isle(row_dict, max_retries=3):
             if template_ozellikler:
                 anlasilir_veri['_Template_Basliktan_Silinecek_Ozellikler'] = template_ozellikler
                 anlasilir_veri['_Template_Notu'] = f"Bu kategoride başlıktan şu özellikler SİLİNECEK (template'de var): {', '.join(template_ozellikler)}. Template'de OLMAYAN özellikler başlıkta KALACAK."
+
+    # 3b. Eksik sütunları ekle (tek çağrıda doldurulsun)
+    if eksik_sutunlar:
+        anlasilir_veri['_Eksik_Sutunlar'] = eksik_sutunlar
+        anlasilir_veri['_Eksik_Notu'] = "Bu sütunlar boş; ürün adı/model/marka bilgisinden değerleri bul ve eksik_sutun_degerleri'nde Excel adıyla ver. Bilinmiyorsa 'bilinmiyor' yazma, atla."
 
     # 4. Prompt oluştur
     prompt = f"GİRDİ VERİSİ:\n{json.dumps(anlasilir_veri, ensure_ascii=False)}"
@@ -671,16 +692,25 @@ def main():
             print(f"İşleniyor: {islenen_sayisi}/{len(df) - len(sonuclar)} (Toplam: {index + 1}/{len(df)})")
         
         try:
+            # Eksik sütunları hesapla (urun_isle tek çağrıda dolduracak)
+            atlanacak_sutunlar = {'Başlık', 'SHOP_SKU', 'Uyari', 'Kategori'}
+            eksik_sutunlar = []
+            if os.getenv("GEMINI_EKSIK_SUTUN", "1") == "1":
+                for sutun_adi in row_dict.keys():
+                    if sutun_adi in atlanacak_sutunlar:
+                        continue
+                    mevcut = row_dict.get(sutun_adi, None)
+                    if pd.notna(mevcut) and (not isinstance(mevcut, str) or str(mevcut).strip() != ''):
+                        continue
+                    eksik_sutunlar.append(sutun_adi)
+
             # Kategori bilgisini ekle (varsa)
+            row_for_api = row_dict.copy()
             if 'Kategori' in row_dict:
                 kategori = row_dict.get('Kategori', '')
-                # Kategori bilgisini prompt'a ekle
-                row_dict_with_category = row_dict.copy()
                 if pd.notna(kategori) and kategori:
-                    row_dict_with_category['_Kategori_Bilgisi'] = str(kategori)
-                gemini_cikti = urun_isle(row_dict_with_category)
-            else:
-                gemini_cikti = urun_isle(row_dict)
+                    row_for_api['_Kategori_Bilgisi'] = str(kategori)
+            gemini_cikti = urun_isle(row_for_api, eksik_sutunlar=eksik_sutunlar if eksik_sutunlar else None)
             
             # Orijinal Excel yapısını koru, sadece güncellemeler yap
             # Orijinal satırı kopyala
@@ -779,110 +809,45 @@ def main():
                     else:
                         flat_result['Ürün Tipi (tr_TR)'] = "Diğer"
             
-            # Uyarı sütunu ekle ve çelişki varsa çöz
+            # Uyarı sütunu ekle - çelişki çözümü urun_isle tek çağrıda döndürüyor (celiski_cozum)
             yeni_uyari = gemini_cikti.get("uyari", '')
-            
-            # ÇELİŞKİ VARSA ÇÖZ
-            celiski_cozuldu = False
-            if pd.notna(yeni_uyari) and yeni_uyari and yeni_uyari != 'null':
-                if "çelişki" in yeni_uyari.lower() or "uyuşmazlık" in yeni_uyari.lower() or "çeliş" in yeni_uyari.lower():
-                    # Çelişki var, Gemini'ye sor
-                    orijinal_baslik = row_dict.get('Başlık', '')
-                    marka = row_dict.get('Marka', '')
-                    
-                    try:
-                        celiski_sonuc = gemini_celiskic_coz(
-                            urun_adi=orijinal_baslik,
-                            uyari_metni=yeni_uyari,
-                            baslik_degeri=flat_result.get('Başlık', orijinal_baslik),
-                            ozellik_dict=ozellikler,
-                            marka=marka
-                        )
-                        
-                        if celiski_sonuc:
-                            ozellik_adi = celiski_sonuc.get("ozellik_adi", "")
-                            dogru_deger = celiski_sonuc.get("dogru_deger", "")
-                            kaynak = celiski_sonuc.get("kaynak", "")
-                            
-                            if ozellik_adi and dogru_deger:
-                                # Özellik ismini Excel sütun ismine çevir
-                                # SUTUN_HARITASI'ndaki değerleri kullanarak ters mapping yap
-                                excel_sutun_ismi = None
-                                
-                                # Ters mapping (anlaşılır isim -> Excel sütun ismi)
-                                ters_harita = {
-                                    "Isletim_Sistemi": "İşletim Sistemi",
-                                    "Renk_Temel": "Renk (temel)",
-                                    "Renk_Uretici": "Renk (Üreticiye Göre) (tr_TR)",
-                                    "RAM_Boyutu": "RAM Bellek Boyutu",
-                                    "Disk_Kapasitesi": "Sabit disk kapasitesi",
-                                    "Ekran_Boyutu_Inc": "Ekran Boyutu (inç)",
-                                    "Grafik_Karti": "Grafik Kartı",
-                                    "Islemci_Modeli": "İşlemci (tr_TR)",
-                                    "Urun_Tipi": "Ürün Tipi (tr_TR)"
-                                }
-                                
-                                excel_sutun_ismi = ters_harita.get(ozellik_adi)
-                                
-                                if excel_sutun_ismi and excel_sutun_ismi in flat_result:
-                                    # Özelliği güncelle
-                                    flat_result[excel_sutun_ismi] = dogru_deger
-                                    print(f"  ✅ {excel_sutun_ismi} güncellendi: '{dogru_deger}'")
-                                    
-                                    # Eğer kaynak "baslik" ise, başlıktan da güncelle (zaten güncellendi)
-                                    # Eğer kaynak "ozellik" ise, başlıktaki yanlış değeri kaldır
-                                    # Başlık zaten temizlenmiş, sadece uyarıyı güncelle
-                                    
-                                    # Uyarıyı "Çözüldü" olarak işaretle
-                                    yeni_uyari = f"Çözüldü: {ozellik_adi} = {dogru_deger} (kaynak: {kaynak})"
-                                    celiski_cozuldu = True
-                                else:
-                                    print(f"  ⚠️ Excel sütunu bulunamadı: {ozellik_adi} -> {excel_sutun_ismi}")
-                                    
-                    except Exception as e:
-                        print(f"  ⚠️ Çelişki çözme hatası: {str(e)[:100]}")
-            
-            # Uyarıyı ekle (çözüldüyse güncellenmiş uyarı, değilse orijinal)
+            celiski_cozum = gemini_cikti.get("celiski_cozum")
+            if celiski_cozum and isinstance(celiski_cozum, dict):
+                ozellik_adi = celiski_cozum.get("ozellik_adi", "")
+                dogru_deger = celiski_cozum.get("dogru_deger", "")
+                kaynak = celiski_cozum.get("kaynak", "")
+                ters_harita = {
+                    "Isletim_Sistemi": "İşletim Sistemi",
+                    "Renk_Temel": "Renk (temel)",
+                    "Renk_Uretici": "Renk (Üreticiye Göre) (tr_TR)",
+                    "RAM_Boyutu": "RAM Bellek Boyutu",
+                    "Disk_Kapasitesi": "Sabit disk kapasitesi",
+                    "Ekran_Boyutu_Inc": "Ekran Boyutu (inç)",
+                    "Grafik_Karti": "Grafik Kartı",
+                    "Islemci_Modeli": "İşlemci (tr_TR)",
+                    "Urun_Tipi": "Ürün Tipi (tr_TR)"
+                }
+                excel_sutun_ismi = ters_harita.get(ozellik_adi)
+                if excel_sutun_ismi and excel_sutun_ismi in flat_result and dogru_deger:
+                    flat_result[excel_sutun_ismi] = dogru_deger
+                    print(f"  ✅ {excel_sutun_ismi} güncellendi: '{dogru_deger}'")
+                    yeni_uyari = f"Çözüldü: {ozellik_adi} = {dogru_deger} (kaynak: {kaynak})"
+
+            # Uyarıyı ekle
             if 'Uyari' not in flat_result:
                 flat_result['Uyari'] = yeni_uyari if yeni_uyari and yeni_uyari != 'null' else ''
             else:
-                # Uyarı varsa ekle
                 mevcut_uyari = flat_result.get('Uyari', '')
                 if pd.notna(yeni_uyari) and yeni_uyari and yeni_uyari != 'null':
-                    if celiski_cozuldu:
-                        # Çelişki çözüldü, sadece yeni uyarıyı yaz
-                        flat_result['Uyari'] = yeni_uyari
-                    else:
-                        # Normal uyarı, birleştir
-                        if pd.notna(mevcut_uyari) and mevcut_uyari:
-                            flat_result['Uyari'] = f"{mevcut_uyari}; {yeni_uyari}"
-                        else:
-                            flat_result['Uyari'] = yeni_uyari
-            
-            # TÜM BOŞ SÜTUNLAR İÇİN GEMINI'YE TEK SEFERDE SOR (toplu, hızlı)
-            if os.getenv("GEMINI_EKSIK_SUTUN", "1") == "1":
-                atlanacak_sutunlar = {'Başlık', 'SHOP_SKU', 'Uyari', 'Kategori'}
-                eksik_sutunlar = []
-                for sutun_adi in row_dict.keys():
-                    if sutun_adi in atlanacak_sutunlar:
-                        continue
-                    mevcut = flat_result.get(sutun_adi, row_dict.get(sutun_adi, None))
-                    if pd.notna(mevcut) and (not isinstance(mevcut, str) or mevcut.strip() != ''):
-                        continue
-                    eksik_sutunlar.append(sutun_adi)
-                if eksik_sutunlar:
-                    try:
-                        bulunanlar = gemini_eksik_sutunlar_toplu_sor(
-                            urun_adi=row_dict.get('Başlık', ''),
-                            eksik_sutunlar=eksik_sutunlar,
-                            marka=row_dict.get('Marka', ''),
-                        )
-                        for sutun_adi, bulunan_deger in bulunanlar.items():
-                            flat_result[sutun_adi] = bulunan_deger
-                            print(f"  ✅ {sutun_adi} Gemini'den bulundu: {bulunan_deger}")
-                        time.sleep(float(os.getenv("GEMINI_DELAY", "0.3")))
-                    except Exception as e:
-                        print(f"  ⚠️ Gemini sorgu hatası: {str(e)[:100]}")
+                    flat_result['Uyari'] = f"{mevcut_uyari}; {yeni_uyari}" if mevcut_uyari else yeni_uyari
+
+            # Eksik sütun değerleri - urun_isle tek çağrıda doldurdu (eksik_sutun_degerleri)
+            eksik_degerler = gemini_cikti.get("eksik_sutun_degerleri") or {}
+            if isinstance(eksik_degerler, dict):
+                for sutun_adi, bulunan_deger in eksik_degerler.items():
+                    if sutun_adi in flat_result and bulunan_deger and (not isinstance(bulunan_deger, str) or "bilinmiyor" not in str(bulunan_deger).lower()):
+                        flat_result[sutun_adi] = str(bulunan_deger).strip() if isinstance(bulunan_deger, str) else bulunan_deger
+                        print(f"  ✅ {sutun_adi} Gemini'den bulundu: {bulunan_deger}")
             
             sonuclar.append(flat_result)
             

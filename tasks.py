@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import os
-import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Tuple
 
 import pandas as pd
 from dotenv import load_dotenv
@@ -92,17 +92,98 @@ def read_job_status(job_id: str) -> Dict[str, Any]:
     return result
 
 
+# Excel sütun eşlemesi (process_single_product için)
+GEMINI_TO_EXCEL = {
+    "RAM": "RAM Bellek Boyutu",
+    "RAM_Boyutu": "RAM Bellek Boyutu",
+    "Disk": "Sabit disk kapasitesi",
+    "Disk_Kapasitesi": "Sabit disk kapasitesi",
+    "Disk_Tipi": "Sabit disk tipi",
+    "RAM_Tipi": "RAM Tipi",
+    "Renk_Temel": "Renk (temel)",
+    "Renk": "Renk (temel)",
+    "Renk_Uretici": "Renk (Üreticiye Göre) (tr_TR)",
+    "Isletim_Sistemi": "İşletim Sistemi",
+    "Grafik_Karti": "Grafik Kartı",
+    "Islemci_Modeli": "İşlemci (tr_TR)",
+    "Ekran_Boyutu_Inc": "Ekran Boyutu (inç)",
+    "Ekran_Boyutu_cm": "Ekran boyutu(cm)",
+    "Kutu_Icerigi": "Kutu İçeriği (tr_TR)",
+    "Kapasite": "Kapasite",
+    "Guc": "Güç",
+    "Frekans": "Frekans",
+    "Voltaj": "Voltaj",
+    "Urun_Tipi": "Ürün Tipi",
+}
+TERS_HARITA = {
+    "Isletim_Sistemi": "İşletim Sistemi",
+    "Renk_Temel": "Renk (temel)",
+    "Renk_Uretici": "Renk (Üreticiye Göre) (tr_TR)",
+    "RAM_Boyutu": "RAM Bellek Boyutu",
+    "Disk_Kapasitesi": "Sabit disk kapasitesi",
+    "Ekran_Boyutu_Inc": "Ekran Boyutu (inç)",
+    "Grafik_Karti": "Grafik Kartı",
+    "Islemci_Modeli": "İşlemci (tr_TR)",
+    "Urun_Tipi": "Ürün Tipi (tr_TR)",
+}
+
+
+def _process_single_product(idx: int, row_dict: Dict[str, Any], eksik_sutunlar: List[str]) -> Tuple[int, Dict[str, Any]]:
+    """
+    Tek ürünü işler, (idx, flat_result) döner. ThreadPoolExecutor ile paralel çağrılabilir.
+    """
+    from main import urun_isle
+
+    gemini_output = urun_isle(row_dict, eksik_sutunlar=eksik_sutunlar if eksik_sutunlar else None)
+    features = gemini_output.get("duzenlenmis_ozellikler") or {}
+
+    flat_result = row_dict.copy()
+    flat_result["Başlık"] = gemini_output.get("temiz_baslik", row_dict.get("Başlık", ""))
+
+    for key, val in features.items():
+        if val is None or (isinstance(val, str) and not val.strip()):
+            continue
+        col = GEMINI_TO_EXCEL.get(key)
+        if col and col in flat_result:
+            flat_result[col] = val
+        elif key in flat_result:
+            flat_result[key] = val
+
+    yeni_uyari = gemini_output.get("uyari", "")
+
+    celiski_cozum = gemini_output.get("celiski_cozum")
+    if celiski_cozum and isinstance(celiski_cozum, dict):
+        ozellik_adi = celiski_cozum.get("ozellik_adi", "")
+        dogru_deger = celiski_cozum.get("dogru_deger", "")
+        excel_sutun = TERS_HARITA.get(ozellik_adi)
+        if excel_sutun and excel_sutun in flat_result and dogru_deger:
+            flat_result[excel_sutun] = dogru_deger
+            yeni_uyari = f"Çözüldü: {ozellik_adi} = {dogru_deger}"
+
+    flat_result["Warning"] = yeni_uyari if yeni_uyari and yeni_uyari != "null" else ""
+
+    eksik_degerler = gemini_output.get("eksik_sutun_degerleri") or {}
+    if isinstance(eksik_degerler, dict):
+        for sutun, deger in eksik_degerler.items():
+            if sutun in flat_result and deger and (
+                not isinstance(deger, str) or "bilinmiyor" not in str(deger).lower()
+            ):
+                flat_result[sutun] = str(deger).strip() if isinstance(deger, str) else deger
+
+    return (idx, flat_result)
+
+
 @celery_app.task(name="process_catalog_job")
 def process_catalog_job(job_id: str) -> Dict[str, Any]:
     """
     Celery task that processes a single Excel upload job.
     Progress is tracked via a per-row CSV; Streamlit/FastAPI poll for status.
+    Uses ThreadPoolExecutor for parallel product processing (GEMINI_PARALLEL_WORKERS, default 5).
     """
     import sys
     _project_root = Path(__file__).resolve().parent
     if str(_project_root) not in sys.path:
         sys.path.insert(0, str(_project_root))
-    from main import urun_isle, gemini_eksik_sutunlar_toplu_sor, gemini_celiskic_coz
 
     input_file = _input_path(job_id)
     status_file = _status_path(job_id)
@@ -111,148 +192,90 @@ def process_catalog_job(job_id: str) -> Dict[str, Any]:
         raise FileNotFoundError(f"Input file not found for job {job_id}")
 
     df = pd.read_excel(input_file)
-    print(f"[Job {job_id}] Başladı: toplam {len(df)} ürün", flush=True)
+    total_rows = len(df)
+    print(f"[Job {job_id}] Başladı: toplam {total_rows} ürün (paralel workers: {os.getenv('GEMINI_PARALLEL_WORKERS', '5')})", flush=True)
 
     # Skip technical header row if present
-    if len(df) > 0 and "Başlık" in df.columns:
+    if total_rows > 0 and "Başlık" in df.columns:
         first_title = str(df.iloc[0].get("Başlık", ""))
         if first_title.startswith("TITLE"):
             df = df.iloc[1:].reset_index(drop=True)
+            total_rows = len(df)
 
     status_df = pd.read_csv(status_file)
     proc = status_df["processed"]
     is_done = (proc == True) | (proc.astype(str).str.lower() == "true")
-    processed_indices = set(status_df.loc[is_done, "index"].tolist())
+    processed_indices = set(int(x) for x in status_df.loc[is_done, "index"].tolist())
 
-    results: List[Dict[str, Any]] = []
-
+    # results_by_idx: index -> flat_result (orijinal sırayı korumak için)
+    results_by_idx: Dict[int, Dict[str, Any]] = {}
     if _output_path(job_id).exists():
         existing = pd.read_excel(_output_path(job_id))
-        results = existing.to_dict("records")
+        existing_records = existing.to_dict("records")
+        sorted_done = sorted(processed_indices)
+        for i, idx in enumerate(sorted_done):
+            if i < len(existing_records):
+                results_by_idx[idx] = existing_records[i]
 
-    total_rows = len(df)
+    # İşlenecek ürünleri topla: (idx, row_dict, eksik_sutunlar)
+    atlanacak_sutunlar = {"Başlık", "SHOP_SKU", "Warning", "Uyari", "Kategori"}
+    to_process: List[Tuple[int, Dict[str, Any], List[str]]] = []
     for idx, row in df.iterrows():
+        idx = int(idx)
         if idx in processed_indices:
             continue
-
-        # Railway/logda ilerleme görünsün
-        done_so_far = len(results)
-        print(f"[Job {job_id}] İşleniyor: satır {done_so_far + 1}/{total_rows} (index={idx})", flush=True)
-
         row_dict = row.to_dict()
-        gemini_output = urun_isle(row_dict)
-        features = gemini_output.get("duzenlenmis_ozellikler") or {}
-
-        flat_result = row_dict.copy()
-        flat_result["Başlık"] = gemini_output.get(
-            "temiz_baslik", row_dict.get("Başlık", "")
-        )
-
-        # Gemini'den gelen tüm özellikleri Excel sütun adlarına yaz (boş çıktı önlenir)
-        gemini_to_excel = {
-            "RAM": "RAM Bellek Boyutu",
-            "RAM_Boyutu": "RAM Bellek Boyutu",
-            "Disk": "Sabit disk kapasitesi",
-            "Disk_Kapasitesi": "Sabit disk kapasitesi",
-            "Disk_Tipi": "Sabit disk tipi",
-            "RAM_Tipi": "RAM Tipi",
-            "Renk_Temel": "Renk (temel)",
-            "Renk": "Renk (temel)",
-            "Renk_Uretici": "Renk (Üreticiye Göre) (tr_TR)",
-            "Isletim_Sistemi": "İşletim Sistemi",
-            "Grafik_Karti": "Grafik Kartı",
-            "Islemci_Modeli": "İşlemci (tr_TR)",
-            "Ekran_Boyutu_Inc": "Ekran Boyutu (inç)",
-            "Ekran_Boyutu_cm": "Ekran boyutu(cm)",
-            "Kutu_Icerigi": "Kutu İçeriği (tr_TR)",
-            "Kapasite": "Kapasite",
-            "Guc": "Güç",
-            "Frekans": "Frekans",
-            "Voltaj": "Voltaj",
-            "Urun_Tipi": "Ürün Tipi",
-        }
-        for key, val in features.items():
-            if val is None or (isinstance(val, str) and not val.strip()):
-                continue
-            col = gemini_to_excel.get(key)
-            if col and col in flat_result:
-                flat_result[col] = val
-            elif key in flat_result:
-                flat_result[key] = val
-
-        yeni_uyari = gemini_output.get("uyari", "")
-
-        # Çelişki varsa gemini_celiskic_coz ile çöz
-        if pd.notna(yeni_uyari) and yeni_uyari and yeni_uyari != "null":
-            if "çelişki" in str(yeni_uyari).lower() or "uyuşmazlık" in str(yeni_uyari).lower() or "çeliş" in str(yeni_uyari).lower():
-                try:
-                    celiski_sonuc = gemini_celiskic_coz(
-                        urun_adi=row_dict.get("Başlık", ""),
-                        uyari_metni=yeni_uyari,
-                        baslik_degeri=flat_result.get("Başlık", ""),
-                        ozellik_dict=features,
-                        marka=row_dict.get("Marka"),
-                    )
-                    if celiski_sonuc:
-                        ozellik_adi = celiski_sonuc.get("ozellik_adi", "")
-                        dogru_deger = celiski_sonuc.get("dogru_deger", "")
-                        ters_harita = {
-                            "Isletim_Sistemi": "İşletim Sistemi",
-                            "Renk_Temel": "Renk (temel)",
-                            "Renk_Uretici": "Renk (Üreticiye Göre) (tr_TR)",
-                            "RAM_Boyutu": "RAM Bellek Boyutu",
-                            "Disk_Kapasitesi": "Sabit disk kapasitesi",
-                            "Ekran_Boyutu_Inc": "Ekran Boyutu (inç)",
-                            "Grafik_Karti": "Grafik Kartı",
-                            "Islemci_Modeli": "İşlemci (tr_TR)",
-                            "Urun_Tipi": "Ürün Tipi (tr_TR)",
-                        }
-                        excel_sutun = ters_harita.get(ozellik_adi)
-                        if excel_sutun and excel_sutun in flat_result:
-                            flat_result[excel_sutun] = dogru_deger
-                            yeni_uyari = f"Çözüldü: {ozellik_adi} = {dogru_deger}"
-                except Exception as e:
-                    print(f"  ⚠️ Çelişki çözme hatası: {str(e)[:100]}", flush=True)
-
-        flat_result["Warning"] = yeni_uyari if yeni_uyari and yeni_uyari != "null" else ""
-
-        # Eksik (boş) sütunlar - tek API çağrısında toplu sorgula (GEMINI_EKSIK_SUTUN=0 ile kapatılabilir)
+        eksik_sutunlar = []
         if os.getenv("GEMINI_EKSIK_SUTUN", "1") == "1":
-            atlanacak_sutunlar = {"Başlık", "SHOP_SKU", "Warning", "Uyari", "Kategori"}
-            eksik_sutunlar = []
-            for sutun_adi in flat_result.keys():
+            for sutun_adi in row_dict.keys():
                 if sutun_adi in atlanacak_sutunlar:
                     continue
-                mevcut = flat_result.get(sutun_adi, None)
-                if pd.notna(mevcut) and (not isinstance(mevcut, str) or mevcut.strip() != ""):
+                mevcut = row_dict.get(sutun_adi, None)
+                if pd.notna(mevcut) and (not isinstance(mevcut, str) or str(mevcut).strip() != ""):
                     continue
                 eksik_sutunlar.append(sutun_adi)
-            if eksik_sutunlar:
-                try:
-                    bulunanlar = gemini_eksik_sutunlar_toplu_sor(
-                        urun_adi=row_dict.get("Başlık", ""),
-                        eksik_sutunlar=eksik_sutunlar,
-                        marka=row_dict.get("Marka"),
-                    )
-                    for sutun, deger in bulunanlar.items():
-                        flat_result[sutun] = deger
-                    time.sleep(float(os.getenv("GEMINI_DELAY", "0.3")))
-                except Exception as e:
-                    print(f"  ⚠️ Gemini eksik sütun hatası: {str(e)[:80]}", flush=True)
+        to_process.append((idx, row_dict, eksik_sutunlar))
 
-        results.append(flat_result)
+    parallel_workers = int(os.getenv("GEMINI_PARALLEL_WORKERS", "5"))
+    parallel_workers = max(1, min(parallel_workers, 15))
 
-        # Mark this row as processed and persist status (her satırda)
-        status_df.loc[status_df["index"] == idx, "processed"] = True
-        status_df.to_csv(status_file, index=False)
+    with ThreadPoolExecutor(max_workers=parallel_workers) as executor:
+        futures = {
+            executor.submit(_process_single_product, idx, row_dict, eksik_sutunlar): idx
+            for idx, row_dict, eksik_sutunlar in to_process
+        }
+        batch_count = 0
+        for future in as_completed(futures):
+            try:
+                idx, flat_result = future.result()
+                results_by_idx[idx] = flat_result
+                processed_indices.add(idx)
+                batch_count += 1
+                if batch_count % 10 == 0 or batch_count == len(to_process):
+                    print(f"[Job {job_id}] İşlendi: {len(results_by_idx)}/{total_rows}", flush=True)
+            except Exception as e:
+                orig_idx = futures[future]
+                print(f"[Job {job_id}] Hata (index={orig_idx}): {str(e)[:100]}", flush=True)
+                # Hata olan ürün için orijinal veri + uyarı ile placeholder ekle
+                for tidx, trow, _ in to_process:
+                    if tidx == orig_idx:
+                        fallback = trow.copy()
+                        fallback["Warning"] = f"İşleme hatası: {str(e)[:150]}"
+                        results_by_idx[orig_idx] = fallback
+                        break
 
-        # Excel: her 20 satırda bir batch yaz (her satırda yazma - performans)
-        if len(results) % 20 == 0:
-            pd.DataFrame(results).to_excel(_output_path(job_id), index=False)
+            # Her batch sonrası status ve Excel güncelle (her 10 üründe veya tamamlandığında)
+            if batch_count % 10 == 0 or batch_count == len(to_process):
+                status_df.loc[status_df["index"].isin(results_by_idx.keys()), "processed"] = True
+                status_df.to_csv(status_file, index=False)
+                ordered = [results_by_idx[i] for i in sorted(results_by_idx.keys())]
+                if ordered:
+                    pd.DataFrame(ordered).to_excel(_output_path(job_id), index=False)
 
-    # İşlem bittiğinde son Excel yazımı (kalan satırlar için)
-    if results:
-        pd.DataFrame(results).to_excel(_output_path(job_id), index=False)
+    # Son Excel yazımı
+    if results_by_idx:
+        ordered = [results_by_idx[i] for i in sorted(results_by_idx.keys())]
+        pd.DataFrame(ordered).to_excel(_output_path(job_id), index=False)
 
     return read_job_status(job_id)
 

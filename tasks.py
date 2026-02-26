@@ -263,6 +263,11 @@ def process_catalog_job(job_id: str) -> Dict[str, Any]:
             total_rows = len(df)
 
     status_df = pd.read_csv(status_file)
+    # Teknik satır atlandıysa status'tan da ilk satırı at, yeniden numarala (toplam 1 fazla görünmesin, %100 tamamlansın)
+    if len(status_df) > total_rows:
+        status_df = status_df.iloc[1:].reset_index(drop=True)
+        status_df["index"] = range(len(status_df))
+        status_df.to_csv(status_file, index=False)
     proc = status_df["processed"]
     is_done = (proc == True) | (proc.astype(str).str.lower() == "true")
     processed_indices = set(int(x) for x in status_df.loc[is_done, "index"].tolist())

@@ -214,6 +214,21 @@ def _process_single_product(
             if pd.notna(mevcut) and (not isinstance(mevcut, str) or str(mevcut).strip() != ""):
                 continue
             kalan_eksik.append(sutun_adi)
+        # EAN/barkod: internet araması ile doldurmayı dene (çok önemli alan)
+        try:
+            from main import ean_ara_internet
+            for sutun_adi in list(kalan_eksik):
+                if "ean" in str(sutun_adi).lower() or "barkod" in str(sutun_adi).lower():
+                    ean_val = ean_ara_internet(
+                        marka=row_dict.get("Marka") or "",
+                        urun_adi=row_dict.get("Başlık") or flat_result.get("Başlık") or "",
+                    )
+                    if ean_val:
+                        flat_result[sutun_adi] = ean_val
+                        kalan_eksik.remove(sutun_adi)
+                    break  # en fazla bir EAN sütunu
+        except Exception:
+            pass
         if kalan_eksik:
             try:
                 ek_doldurma = gemini_eksik_sutunlar_toplu_sor(
@@ -228,6 +243,34 @@ def _process_single_product(
                 time.sleep(float(os.getenv("GEMINI_DELAY", "0.2")))
             except Exception:
                 pass
+
+    # Ürün Tipi değerini Kutu İçeriği'ne kopyala (ayrı doldurma gereksin)
+    def _dolu(v):
+        return v is not None and (not isinstance(v, str) or str(v).strip() != "")
+
+    for urun_tipi_key in ("Ürün Tipi (tr_TR)", "Ürün Tipi"):
+        if urun_tipi_key not in flat_result:
+            continue
+        val = flat_result.get(urun_tipi_key)
+        if not _dolu(val):
+            continue
+        val_str = val.strip() if isinstance(val, str) else val
+        for kutu_key in ("Kutu İçeriği (tr_TR)", "Kutu İçeriği"):
+            if kutu_key in flat_result and not _dolu(flat_result.get(kutu_key)):
+                flat_result[kutu_key] = val_str
+            if kutu_key in flat_result:
+                break
+        break
+
+    # Renk (temel) değerini Renk (Üreticiye Göre)'ye kopyala (ayrı doldurma gereksin)
+    renk_temel = flat_result.get("Renk (temel)")
+    if _dolu(renk_temel):
+        renk_str = renk_temel.strip() if isinstance(renk_temel, str) else renk_temel
+        for renk_uretici_key in ("Renk (Üreticiye Göre) (tr_TR)", "Renk (Üreticiye Göre)"):
+            if renk_uretici_key in flat_result and not _dolu(flat_result.get(renk_uretici_key)):
+                flat_result[renk_uretici_key] = renk_str
+            if renk_uretici_key in flat_result:
+                break
 
     return (idx, flat_result)
 
@@ -253,6 +296,8 @@ def process_catalog_job(job_id: str) -> Dict[str, Any]:
     output_lang = _read_job_language(job_id)
     df = pd.read_excel(input_file)
     total_rows = len(df)
+    # Orijinal sütun başlıklarını ve sırasını koru; dosya yapısına dokunma
+    original_columns = list(df.columns)
     print(f"[Job {job_id}] Başladı: toplam {total_rows} ürün (paralel workers: {os.getenv('GEMINI_PARALLEL_WORKERS', '10')})", flush=True)
 
     # Skip technical header row if present
@@ -335,12 +380,14 @@ def process_catalog_job(job_id: str) -> Dict[str, Any]:
                 status_df.to_csv(status_file, index=False)
                 ordered = [results_by_idx[i] for i in sorted(results_by_idx.keys())]
                 if ordered:
-                    pd.DataFrame(ordered).to_excel(_output_path(job_id), index=False)
+                    out_df = pd.DataFrame(ordered).reindex(columns=original_columns)
+                    out_df.to_excel(_output_path(job_id), index=False)
 
-    # Son Excel yazımı
+    # Son Excel yazımı (orijinal sütun başlıkları ve sırası korunur)
     if results_by_idx:
         ordered = [results_by_idx[i] for i in sorted(results_by_idx.keys())]
-        pd.DataFrame(ordered).to_excel(_output_path(job_id), index=False)
+        out_df = pd.DataFrame(ordered).reindex(columns=original_columns)
+        out_df.to_excel(_output_path(job_id), index=False)
 
     return read_job_status(job_id)
 

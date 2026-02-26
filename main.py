@@ -131,6 +131,56 @@ chat_model = genai.GenerativeModel(
     generation_config={"temperature": 0.1}
 )
 
+
+def ean_ara_internet(marka: str, urun_adi: str, num_results: int = 8):
+    """
+    EAN/barkod bilgisini internet araması ile bulmaya çalışır.
+    EAN = ürünün barkodudur; bu alanın doldurulması çok önemlidir.
+    Returns:
+        Bulunan 13 rakamlı EAN-13 kodu veya None.
+    """
+    import re
+    try:
+        from googlesearch import search as gsearch
+    except Exception:
+        return None
+    query = f"{marka or ''} {urun_adi or ''} EAN barcode".strip()
+    if not query or len(query) < 5:
+        return None
+    ean13 = re.compile(r"\b(\d{13})\b")
+    try:
+        for url in gsearch(query, num_results=num_results, advanced=True):
+            # advanced=True returns (url, title, description) or similar - library may vary
+            text = ""
+            if isinstance(url, (list, tuple)):
+                text = " ".join(str(x) for x in url)
+            else:
+                text = str(url)
+            for m in ean13.findall(text):
+                if _ean13_checksum_ok(m):
+                    return m
+        # Fallback: try without advanced to get URLs only, then we can't parse snippet
+        for url in gsearch(query, num_results=num_results):
+            text = str(url)
+            for m in ean13.findall(text):
+                if _ean13_checksum_ok(m):
+                    return m
+    except Exception:
+        pass
+    return None
+
+
+def _ean13_checksum_ok(digits: str) -> bool:
+    """EAN-13 check digit doğrulama."""
+    if len(digits) != 13 or not digits.isdigit():
+        return False
+    total = 0
+    for i, d in enumerate(digits[:12]):
+        total += int(d) * (1 if i % 2 == 0 else 3)
+    check = (10 - (total % 10)) % 10
+    return check == int(digits[12])
+
+
 def gemini_eksik_sutun_sor(urun_adi, eksik_sutun_basligi, marka=None, model_adi=None):
     """
     Gemini'ye ürün hakkında soru sorar ve eksik sütun bilgisini alır
@@ -236,6 +286,9 @@ def gemini_eksik_sutunlar_toplu_sor(urun_adi, eksik_sutunlar: list, marka=None, 
                 soru_parts.append(f"Model Kodu: {model_match.group(0)}")
 
         sutun_listesi = "\n".join(f"- {s}" for s in eksik_sutunlar)
+        ean_notu = ""
+        if any("ean" in str(s).lower() or "barkod" in str(s).lower() for s in eksik_sutunlar):
+            ean_notu = "\n- EAN / BARKOD: EAN = ürünün barkodudur (13 rakam). Bu alanın doldurulması çok önemli; marka/model/ürün adından bilinen EAN-13 kodunu yaz."
         soru = "\n".join(soru_parts) + f"""
 
 Aşağıdaki eksik özellikleri bu ürün için doldur. Her özellik için SADECE değeri ver (açıklama yok).
@@ -248,7 +301,7 @@ KURALLAR:
 - Bilinmeyenler için "bilinmiyor" yaz veya o sütunu dahil etme
 - Birimler: W (güç), bar, kg, GB (depolama), inç (ekran) - bu formatlarda yaz
 - Tüm değerleri {lang_name} dilinde yaz.
-- Mümkün olduğunca çok sütunu doldur; ürün adı/model/marka bilgisinden çıkarabildiğini yaz
+- Mümkün olduğunca çok sütunu doldur; ürün adı/model/marka bilgisinden çıkarabildiğini yaz.{ean_notu}
 
 Cevap:"""
 
@@ -380,7 +433,10 @@ GENEL ÇALIŞMA PRENSİBİ (TÜM KATEGORİLER İÇİN):
    - Kategorinin özelliklerine göre başlıktan hangi bilgilerin çıkarılacağını belirle
    - Yeni bir kategori görürsen, o kategorinin tipik özelliklerini analiz et ve benzer mantıkla işle
 
-2. **ÖZELLİK ÇIKARMA VE DOLDURMA:**
+2. **DOSYA YAPISI (KRİTİK):**
+   - Excel dosyasının sütun başlıklarına DOKUNMA; sütun adlarını değiştirme, ekleme veya silme. Sadece hücre değerlerini doldur, yapıyı bozma.
+
+3. **ÖZELLİK ÇIKARMA VE DOLDURMA:**
 
    - Başlıktan TÜM özellikleri çıkar (kategorinin tipik özelliklerine göre)
    - Eğer özellik sütunu BOŞSA → Başlıktan çıkardığın bilgiyi o özellik sütununa YAZ
@@ -389,7 +445,7 @@ GENEL ÇALIŞMA PRENSİBİ (TÜM KATEGORİLER İÇİN):
    - ÖRNEK: Başlık "HP Laptop Siyah 16GB" ve Renk_Temel boşsa → Renk: "Siyah" yaz
    - ÖRNEK: Başlık "HP Laptop Siyah" ve Renk_Temel "Gümüş" doluysa → Renk: "Gümüş" KORU, başlıktan "Siyah"ı sil ama sütuna yazma
 
-3. **BAŞLIK TEMİZLİĞİ (KRİTİK - TEMPLATE SİSTEMİ):**
+4. **BAŞLIK TEMİZLİĞİ (KRİTİK - TEMPLATE SİSTEMİ):**
 
    TEMPLATE KURALLARI (ÇOK ÖNEMLİ):
    - Eğer _Template_Basliktan_Silinecek_Ozellikler alanı varsa, bu alandaki özellikleri başlıktan MUTLAKA SİL
@@ -400,6 +456,10 @@ GENEL ÇALIŞMA PRENSİBİ (TÜM KATEGORİLER İÇİN):
      → "Su Geçirmez" başlıkta KALACAK (template'de yok, ürünü tanımlıyor)
      → Sonuç: "Su Geçirmez"
    
+   SÜTUNDA VARSA BAŞLIKTAN SİL (ÇOK ÖNEMLİ):
+   - Her ürünün sütunları farklıdır (renk, sinyal iletimi, ürün tipi, kutu içeriği, kapasite vb.). Bu ürünün satırında hangi sütunda zaten dolu bilgi varsa, o bilgiyi başlıktan MUTLAKA sil; başlıkta tekrar etmesin.
+   - Örnek: Renk sütunu doluysa renk bilgisi başlıktan silinir; Ürün Tipi doluysa ürün tipi başlıktan silinir. Sütun seti ürün ürün değişir, sadece dolu olan sütunlardaki bilgiler başlıktan çıkarılır.
+
    GENEL BAŞLIK TEMİZLİK KURALLARI:
    - MARKA İSMİNİ BAŞLIKTAN SİL (HP, Dell, Lenovo, Philips, AWOX, vb. - kategorinin markalarına göre)
    - Template'deki özellikleri başlıktan SİL (yukarıdaki kurala göre)
@@ -407,7 +467,7 @@ GENEL ÇALIŞMA PRENSİBİ (TÜM KATEGORİLER İÇİN):
    - Ürün kodları (CNT ile başlayanlar, model kodları) BAŞLIKTA KALSIN
    - Geriye sadece model adı, ürün kodu ve template'de olmayan özellikler kalsın
 
-4. **ÜRÜN TİPİ OLUŞTURMA (KRİTİK - OLABİLDİĞİNCE GENEL TUT):**
+5. **ÜRÜN TİPİ OLUŞTURMA (KRİTİK - OLABİLDİĞİNCE GENEL TUT):**
 
    - Ürün Tipi sütunu YOKSA veya BOŞSA → Başlıktan ve kategoriden analiz ederek ÜRÜN TİPİ OLUŞTUR
    - ÜRÜN TİPİ MUTLAKA GENEL OLMALI! Sadece ana kategori adını yaz:
@@ -419,7 +479,11 @@ GENEL ÇALIŞMA PRENSİBİ (TÜM KATEGORİLER İÇİN):
    - Olası eklemeler/nitelikler (Inverter, X, Pro, Plus, Mini vb.) ÜRÜN TİPİNE DEĞİL, BAŞLIĞIN SONUNA yaz
    - ÖRNEK: "X Klima 12000 BTU" → Ürün Tipi: "Klima", Başlık: "Model123 12000 BTU X"
 
-5. **DEĞER STANDARDİZASYONU (ARALIK/ÇOKLU DEĞER İÇİN - KRİTİK - ÖĞREN VE UYGULA):**
+   KOPYALAMA KURALLARI (AYNI DEĞERİ YAZ, AYRI ÜRETME):
+   - Ürün Tipi sütununa yazdığın değeri aynen Kutu İçeriği sütununa da yaz; Kutu İçeriği için ayrı değer üretme.
+   - Renk (temel) sütununa yazdığın değeri aynen Renk (Üreticiye Göre) sütununa da yaz; Renk (Üreticiye Göre) için ayrı değer üretme.
+
+6. **DEĞER STANDARDİZASYONU (ARALIK/ÇOKLU DEĞER İÇİN - KRİTİK - ÖĞREN VE UYGULA):**
 
    ARALIK/ÇOKLU DEĞER GÖRDÜĞÜNDE MUTLAKA TEK DEĞER SEÇ:
    
@@ -444,7 +508,7 @@ GENEL ÇALIŞMA PRENSİBİ (TÜM KATEGORİLER İÇİN):
    - Voltaj için: Standart değer (220 V) veya üst değer seçilebilir
    - ÖNEMLİ: Asla aralık veya çoklu değer bırakma, MUTLAKA tek değer seç ve yaz!
 
-6. **KATEGORİYE ÖZEL KURALLAR (ÖRNEKLER - YENİ KATEGORİLER İÇİN BENZER MANTIK UYGULA):**
+7. **KATEGORİYE ÖZEL KURALLAR (ÖRNEKLER - YENİ KATEGORİLER İÇİN BENZER MANTIK UYGULA):**
 
    LAPTOP/DİZÜSTÜ BİLGİSAYAR için:
    - Disk: "1TBSSD+2TBSSD" → "2 TB" (büyük olan, sayı ve birim ayrı, SSD yazma - BİLGİSAYAR BİRİMİ BÜYÜK HARF)
@@ -462,7 +526,7 @@ GENEL ÇALIŞMA PRENSİBİ (TÜM KATEGORİLER İÇİN):
    - ÖNEMLİ: Kapasite, güç, frekans, voltaj gibi değerler başlıktan SİLİNMELİ ama özellik sütununa TEK DEĞER olarak yazılmalı (aralık/çoklu değer varsa birini seç)
    - JSON çıktısında şu alanları kullan: "Kapasite", "Guc" (veya "Güç"), "Frekans", "Voltaj"
 
-7. **STANDART KURALLAR (TÜM KATEGORİLER İÇİN):**
+8. **STANDART KURALLAR (TÜM KATEGORİLER İÇİN):**
 
    - Full HD → FHD (her yerde)
    - Kısaltmaları aç (W11P → Windows 11 Pro, vb.)
@@ -482,25 +546,26 @@ GENEL ÇALIŞMA PRENSİBİ (TÜM KATEGORİLER İÇİN):
    - Ürün kodları (CNT ile başlayanlar, model kodları) BAŞLIKTA KALSIN
    - ÖNEMLİ: Özellik sütunlarına yazdığın tüm bilgiler (kapasite, güç, boyut, RAM, Disk vb.) başlıktan SİLİNMELİ
 
-8. **UYUŞMAZLIK KONTROLÜ:**
+9. **UYUŞMAZLIK KONTROLÜ:**
    - Eğer bir özellik sütunu DOLUYSA, başlıktaki bilgiyle KARŞILAŞTIR
    - Sadece AŞIRI ve bariz çelişkiler için uyarı ver (Örn: Başlık "Windows 11" ama sütun "FreeDOS")
    - Normal boyut farkları için uyarı verme (Örn: Başlık 16GB, Sütun 8GB)
 
-9. **YENİ KATEGORİLER İÇİN:**
+10. **YENİ KATEGORİLER İÇİN:**
    - Kategorinin tipik özelliklerini analiz et
    - Başlıktan hangi bilgilerin çıkarılacağını belirle
    - O kategorinin standart formatlarını uygula
    - Genel kuralları (marka silme, kod koruma, vb.) uygula
 
-10. **EKSİK SÜTUNLAR (_Eksik_Sutunlar varsa):**
+11. **EKSİK SÜTUNLAR (_Eksik_Sutunlar varsa):**
    - _Eksik_Sutunlar listesindeki sütunlar boş; mümkün olduğunca çok sütunu doldur
+   - **EAN / BARKOD (ÇOK ÖNEMLİ):** EAN = ürünün barkodudur (barcode). EAN sütunu varsa ve boşsa bu alanı mutlaka doldurmaya çalış; marka, model ve ürün adından bilinen veya tahmin edilebilir EAN-13 kodunu (13 rakam) yaz. Bu bilginin doldurulması çok önemli.
    - Ürün adı, model kodu, marka, kategori bilgisinden çıkarabildiğin tüm değerleri yaz
    - "eksik_sutun_degerleri"nde Excel sütun adıyla ver. Format: W, bar, kg, GB, inç kuralına uy
    - Dayanağı olmayan tahmin yapma; ama ürün bilgisi bir değere işaret ediyorsa (örn. model kodu, başlık) doldur
    - Hiçbir ipucu yoksa boş bırak
 
-11. **ÇELİŞKİ ÇÖZÜMÜ (uyari ile birlikte):**
+12. **ÇELİŞKİ ÇÖZÜMÜ (uyari ile birlikte):**
    - Çelişki tespit ettiğinde sadece uyari verme; aynı yanıtta "celiski_cozum" ile doğru değeri belirt
    - celiski_cozum: {"ozellik_adi": "Isletim_Sistemi", "dogru_deger": "Windows 11", "kaynak": "baslik" veya "ozellik"}
    - Çelişki yoksa celiski_cozum: null
@@ -524,7 +589,7 @@ GENEL ÇALIŞMA PRENSİBİ (TÜM KATEGORİLER İÇİN):
 """
 
 # Kısa prompt: daha hızlı yanıt (varsayılan); GEMINI_FAST=0 ile tam prompt kullanılır
-system_instruction_compact = """Ürün katalog yöneticisi. (1) Başlıktan özellikleri çıkar, boş sütunlara yaz; dolu sütunlara dokunma. (2) Marka ve template'deki özellikleri başlıktan sil, model/kod kalsın. (3) Ürün Tipi: OLABİLDİĞİNCE GENEL tut (örn. "Klima" yaz, "X Klima" değil; "X" gibi nitelikler başlığın sonuna). (4) Birimler: W, bar, kg, GB, inç formatında yaz (örn: "2200 W", "16 GB", "15.6 inç"). (5) Aralık/çoklu değerde tek değer seç. (6) _Eksik_Sutunlar: Mümkün olduğunca çok sütunu doldur; ürün adı/model/marka bilgisinden çıkarabildiğini yaz. Dayanağı olmayan tahmin yapma; ipucu varsa doldur. (7) Çelişki varsa celiski_cozum ekle.
+system_instruction_compact = """Ürün katalog yöneticisi. (1) Sütun başlıklarına dokunma; sadece hücre değerlerini doldur, yapıyı bozma. (2) Başlıktan özellikleri çıkar, boş sütunlara yaz; dolu sütunlara dokunma. (3) Marka ve template'deki özellikleri başlıktan sil, model/kod kalsın. (4) Bu ürünün sütunlarında zaten dolu olan her bilgiyi başlıktan mutlaka sil. (5) Ürün Tipi: GENEL tut; Ürün Tipi=Kutu İçeriği, Renk (temel)=Renk (Üreticiye Göre) aynen kopyala. (6) Birimler: W, bar, kg, GB, inç formatında yaz. (7) Aralık/çoklu değerde tek değer seç. (8) _Eksik_Sutunlar: Mümkün olduğunca çok sütunu doldur; EAN/barkod sütunu varsa mutlaka doldurmaya çalış (EAN=ürün barkodu, 13 rakam). (9) Çelişki varsa celiski_cozum ekle.
 Çıktı JSON: {"temiz_baslik": "...", "duzenlenmis_ozellikler": {...}, "uyari": "...", "eksik_sutun_degerleri": {"Sütun_Adı": "değer"}, "celiski_cozum": {...} veya null}
 """
 

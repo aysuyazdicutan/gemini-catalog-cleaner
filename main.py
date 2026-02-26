@@ -134,40 +134,139 @@ chat_model = genai.GenerativeModel(
 
 def ean_ara_internet(marka: str, urun_adi: str, num_results: int = 8):
     """
-    EAN/barkod bilgisini internet araması ile bulmaya çalışır.
+    EAN/barkod bilgisini internet araması ile daha hedefli şekilde bulmaya çalışır.
     EAN = ürünün barkodudur; bu alanın doldurulması çok önemlidir.
+
+    Strateji:
+    - Ürün başlığından model kodunu (örn. HLEH10A2TCEX) çıkarmaya çalış.
+    - Önce marka + model kodu ile, sonra marka + kısa başlık ile arama yap.
+    - Sonuç snippet'lerinde (title, description, url) geçen EAN-13 adaylarını tara.
+    - Marka / model ve "EAN/GTIN/barkod/barcode" geçen bağlamdaki EAN'lara öncelik ver.
+
     Returns:
-        Bulunan 13 rakamlı EAN-13 kodu veya None.
+        Bulunan en iyi 13 rakamlı EAN-13 kodu veya None.
     """
     import re
+    urun_adi_str = str(urun_adi or "")
+
+    # Ürün adından model numarasını çıkarmaya çalış (örn: HLEH10A2TCEX-17)
+    model_kodu = None
+    try:
+        model_match = re.search(r"[A-Z0-9]{4,}[-]?[A-Z0-9]{0,}", urun_adi_str)
+        if model_match and len(model_match.group(0)) >= 4:
+            model_kodu = model_match.group(0)
+    except Exception:
+        model_kodu = None
+
     try:
         from googlesearch import search as gsearch
     except Exception:
         return None
-    query = f"{marka or ''} {urun_adi or ''} EAN barcode".strip()
-    if not query or len(query) < 5:
+
+    # Sorgu çekirdeğini oluştur (marka + model kodu veya kısa başlık)
+    base_parts = []
+    if marka:
+        base_parts.append(str(marka))
+    if model_kodu:
+        base_parts.append(model_kodu)
+    else:
+        # Model kodu yoksa başlığı sadeleştir (ilk tire öncesi, ilk ~10 kelime)
+        kisa = urun_adi_str.split(" - ")[0]
+        kisa = " ".join(kisa.split()[:10])
+        if kisa:
+            base_parts.append(kisa)
+
+    base_core = " ".join(base_parts).strip()
+    if not base_core:
         return None
+
+    # En spesifikten daha genele doğru birkaç farklı sorgu dene
+    sorgular = [
+        f"{base_core} EAN",
+        f"{base_core} GTIN",
+        f"{base_core} barkod",
+    ]
+    # Son çare: tam başlıkla arama
+    if urun_adi_str and urun_adi_str not in base_core:
+        sorgular.append(f"{marka or ''} {urun_adi_str} EAN".strip())
+
     ean13 = re.compile(r"\b(\d{13})\b")
+
+    def _skorla(kandidat, context_lower):
+        # Basit bağlam skoru: marka/model ve EAN etiket kelimeleri
+        skor = 0
+        if any(k in context_lower for k in ("ean", "gtin", "barkod", "barcode")):
+            skor += 2
+        if marka and str(marka).lower() in context_lower:
+            skor += 2
+        if model_kodu and model_kodu.lower() in context_lower:
+            skor += 3
+        return skor
+
+    en_iyi_ean = None
+    en_iyi_skor = 0
+
     try:
-        for url in gsearch(query, num_results=num_results, advanced=True):
-            # advanced=True returns (url, title, description) or similar - library may vary
-            text = ""
-            if isinstance(url, (list, tuple)):
-                text = " ".join(str(x) for x in url)
-            else:
-                text = str(url)
-            for m in ean13.findall(text):
-                if _ean13_checksum_ok(m):
-                    return m
-        # Fallback: try without advanced to get URLs only, then we can't parse snippet
-        for url in gsearch(query, num_results=num_results):
-            text = str(url)
-            for m in ean13.findall(text):
-                if _ean13_checksum_ok(m):
-                    return m
+        for query in sorgular:
+            if not query or len(query) < 4:
+                continue
+
+            # advanced=True: mümkünse başlık + açıklama + url metni üzerinden tara
+            try:
+                for res in gsearch(query, num_results=num_results, advanced=True):
+                    parcalar = []
+                    # Farklı sürümlere göre esnek parse
+                    if isinstance(res, dict):
+                        for k in ("title", "description", "url", "snippet", "text"):
+                            v = res.get(k)
+                            if v:
+                                parcalar.append(str(v))
+                    elif isinstance(res, (list, tuple)):
+                        parcalar = [str(x) for x in res]
+                    else:
+                        parcalar = [str(res)]
+
+                    text = " ".join(parcalar)
+                    if not text:
+                        continue
+
+                    for m in ean13.finditer(text):
+                        aday = m.group(1)
+                        if not _ean13_checksum_ok(aday):
+                            continue
+                        # EAN çevresindeki bağlamı al
+                        start = max(0, m.start() - 80)
+                        end = min(len(text), m.end() + 80)
+                        context_lower = text[start:end].lower()
+                        skor = _skorla(aday, context_lower)
+                        if skor > en_iyi_skor:
+                            en_iyi_skor = skor
+                            en_iyi_ean = aday
+
+            except Exception:
+                # advanced başarısız olursa basit URL listesi üzerinden şansını dene
+                try:
+                    for url in gsearch(query, num_results=num_results):
+                        text = str(url)
+                        for m in ean13.finditer(text):
+                            aday = m.group(1)
+                            if not _ean13_checksum_ok(aday):
+                                continue
+                            context_lower = text.lower()
+                            skor = _skorla(aday, context_lower)
+                            if skor > en_iyi_skor:
+                                en_iyi_skor = skor
+                                en_iyi_ean = aday
+                except Exception:
+                    continue
+
+            # Yeterince yüksek skorlu bir EAN bulduysak erken çık
+            if en_iyi_ean and en_iyi_skor >= 3:
+                break
     except Exception:
         pass
-    return None
+
+    return en_iyi_ean
 
 
 def _ean13_checksum_ok(digits: str) -> bool:
@@ -179,6 +278,140 @@ def _ean13_checksum_ok(digits: str) -> bool:
         total += int(d) * (1 if i % 2 == 0 else 3)
     check = (10 - (total % 10)) % 10
     return check == int(digits[12])
+
+
+def urun_boyutu_ara_internet(marka: str, urun_adi: str, num_results: int = 10):
+    """
+    Ürün boyutları (en x boy x yükseklik cm) ve ağırlık (kg) bilgisini internet araması ile bulmaya çalışır.
+    Returns:
+        dict: Bulunan değerler. Olası anahtarlar: en_cm, boy_cm, yukseklik_cm, derinlik_cm, agirlik_kg, boyut_tek (örn. "20 x 30 x 40 cm").
+    """
+    import re
+    urun_adi_str = str(urun_adi or "")
+    model_kodu = None
+    try:
+        model_match = re.search(r"[A-Z0-9]{4,}[-]?[A-Z0-9]{0,}", urun_adi_str)
+        if model_match and len(model_match.group(0)) >= 4:
+            model_kodu = model_match.group(0)
+    except Exception:
+        model_kodu = None
+
+    base_parts = [str(marka)] if marka else []
+    if model_kodu:
+        base_parts.append(model_kodu)
+    else:
+        kisa = urun_adi_str.split(" - ")[0]
+        kisa = " ".join(kisa.split()[:8])
+        if kisa:
+            base_parts.append(kisa)
+    base_core = " ".join(base_parts).strip()
+    if not base_core:
+        return {}
+
+    try:
+        from googlesearch import search as gsearch
+    except Exception:
+        return {}
+
+    sonuc = {}
+    toplam_metin = []
+
+    sorgular = [
+        f"{base_core} boyut dimensions ölçü cm",
+        f"{base_core} ağırlık weight kg specifications",
+    ]
+
+    for query in sorgular:
+        if not query or len(query) < 4:
+            continue
+        try:
+            for res in gsearch(query, num_results=num_results, advanced=True):
+                parcalar = []
+                if isinstance(res, dict):
+                    for k in ("title", "description", "url", "snippet", "text"):
+                        v = res.get(k)
+                        if v:
+                            parcalar.append(str(v))
+                elif isinstance(res, (list, tuple)):
+                    parcalar = [str(x) for x in res]
+                else:
+                    parcalar = [str(res)]
+                toplam_metin.append(" ".join(parcalar))
+        except Exception:
+            try:
+                for url in gsearch(query, num_results=num_results):
+                    toplam_metin.append(str(url))
+            except Exception:
+                continue
+
+    text = " ".join(toplam_metin)
+    if not text:
+        return sonuc
+
+    # 20 x 30 x 40 cm veya 20x30x40 mm
+    ucboyut = re.search(
+        r"(\d+[,.]?\d*)\s*[x×X]\s*(\d+[,.]?\d*)\s*[x×X]\s*(\d+[,.]?\d*)\s*(cm|mm)",
+        text,
+        re.IGNORECASE,
+    )
+    if ucboyut:
+        en, boy, yuk = ucboyut.group(1).replace(",", "."), ucboyut.group(2).replace(",", "."), ucboyut.group(3).replace(",", ".")
+        birim = (ucboyut.group(4) or "").lower()
+        if birim == "mm":
+            try:
+                en = str(round(float(en) / 10, 1))
+                boy = str(round(float(boy) / 10, 1))
+                yuk = str(round(float(yuk) / 10, 1))
+            except Exception:
+                pass
+        sonuc["en_cm"] = f"{en} cm"
+        sonuc["boy_cm"] = f"{boy} cm"
+        sonuc["yukseklik_cm"] = f"{yuk} cm"
+        sonuc["boyut_tek"] = f"{en} x {boy} x {yuk} cm"
+
+    # Ağırlık: ... 2.5 kg veya 2,5 kg (çıktı: "2.5 kg")
+    agirlik = re.search(r"(?:ağırlık|weight|weight:)\s*(\d+[,.]?\d*)\s*kg", text, re.IGNORECASE)
+    if not agirlik:
+        agirlik = re.search(r"(\d+[,.]?\d*)\s*kg(?:\s|$|,|\.)", text)
+    if agirlik:
+        sonuc["agirlik_kg"] = agirlik.group(1).replace(",", ".") + " kg"
+
+    # Tekil en / boy / yükseklik / derinlik (cm)
+    for label, key in [
+        (r"en\s*[:\s]*(\d+[,.]?\d*)\s*cm", "en_cm"),
+        (r"boy\s*[:\s]*(\d+[,.]?\d*)\s*cm", "boy_cm"),
+        (r"(?:yükseklik|height)\s*[:\s]*(\d+[,.]?\d*)\s*cm", "yukseklik_cm"),
+        (r"(?:derinlik|depth)\s*[:\s]*(\d+[,.]?\d*)\s*cm", "derinlik_cm"),
+        (r"(?:genişlik|width)\s*[:\s]*(\d+[,.]?\d*)\s*cm", "en_cm"),
+    ]:
+        m = re.search(label, text, re.IGNORECASE)
+        if m and key not in sonuc:
+            sonuc[key] = m.group(1).replace(",", ".") + " cm"
+
+    return sonuc
+
+
+def _boyut_sutun_eslestir(sutun_adi: str):
+    """
+    Eksik sütun adının hangi boyut anahtarına karşılık geldiğini döner.
+    Returns: ('en_cm'|'boy_cm'|'yukseklik_cm'|'derinlik_cm'|'agirlik_kg'|'boyut_tek'|None, birim formatında değer yazılacak mı)
+    """
+    ad = (sutun_adi or "").lower()
+    if "ekran" in ad and "boyut" in ad:
+        return None
+    if "ağırlık" in ad or "agirlik" in ad or "weight" in ad:
+        return "agirlik_kg"
+    if "en " in ad or ("en" == ad.strip()) or (ad.startswith("en ") or "width" in ad or "genişlik" in ad):
+        return "en_cm"
+    if "boy " in ad or "boy(" in ad or ("boy" == ad.strip()) and "boyut" not in ad:
+        return "boy_cm"
+    if "yükseklik" in ad or "yukseklik" in ad or "height" in ad:
+        return "yukseklik_cm"
+    if "derinlik" in ad or "depth" in ad:
+        return "derinlik_cm"
+    if "boyut" in ad or "dimension" in ad or "ölçü" in ad:
+        return "boyut_tek"
+    return None
 
 
 def gemini_eksik_sutun_sor(urun_adi, eksik_sutun_basligi, marka=None, model_adi=None):

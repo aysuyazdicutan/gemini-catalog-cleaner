@@ -229,6 +229,24 @@ def _process_single_product(
                     break  # en fazla bir EAN sütunu
         except Exception:
             pass
+
+        # Boyut / ağırlık: internet araması ile doldurmayı dene
+        try:
+            from main import urun_boyutu_ara_internet, _boyut_sutun_eslestir
+            boyut_sutunlari = [s for s in kalan_eksik if _boyut_sutun_eslestir(s) is not None]
+            if boyut_sutunlari:
+                boyut_degerleri = urun_boyutu_ara_internet(
+                    marka=row_dict.get("Marka") or "",
+                    urun_adi=row_dict.get("Başlık") or flat_result.get("Başlık") or "",
+                )
+                for sutun_adi in list(kalan_eksik):
+                    key = _boyut_sutun_eslestir(sutun_adi)
+                    if key and boyut_degerleri.get(key):
+                        flat_result[sutun_adi] = boyut_degerleri[key]
+                        kalan_eksik.remove(sutun_adi)
+        except Exception:
+            pass
+
         if kalan_eksik:
             try:
                 ek_doldurma = gemini_eksik_sutunlar_toplu_sor(
